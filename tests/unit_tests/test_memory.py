@@ -16,7 +16,6 @@ from react_agent.memory import (
     _BENCHMARK_SIGNALS,
     _benchmark_mode,
     _in_benchmark_mode,
-    _looks_like_benchmark,
     extract_facts,
     remember,
     set_benchmark_mode,
@@ -61,7 +60,6 @@ class TestRememberToolBenchmarkGuard:
 
     def test_rejects_benchmark_signal(self) -> None:
         """Even without benchmark_mode, pattern-matched facts are rejected."""
-        import asyncio
         result = asyncio.run(remember(
             "plan a 3-day trip to tokyo for a first-time visitor"
         ))
@@ -69,7 +67,6 @@ class TestRememberToolBenchmarkGuard:
 
     def test_rejects_in_benchmark_mode(self) -> None:
         """With benchmark_mode=True, even normal facts are rejected."""
-        import asyncio
         set_benchmark_mode(True)
         try:
             result = asyncio.run(remember("The user prefers short answers"))
@@ -79,7 +76,6 @@ class TestRememberToolBenchmarkGuard:
 
     def test_benchmark_mode_trumps_all(self) -> None:
         """benchmark_mode=True blocks everything, regardless of content."""
-        import asyncio
         set_benchmark_mode(True)
         try:
             result = asyncio.run(remember("The sky is blue"))
@@ -96,7 +92,6 @@ class TestExtractFactsBenchmarkGuard:
 
     def test_in_benchmark_mode_returns_empty(self) -> None:
         """In benchmark mode, extract_facts returns [] without calling LLM."""
-        import asyncio
         from unittest.mock import AsyncMock
 
         from langchain_core.messages import AIMessage, HumanMessage
@@ -124,7 +119,7 @@ class TestBenchmarkSignals:
 
     def test_no_empty_signals(self) -> None:
         for signal in _BENCHMARK_SIGNALS:
-            assert signal.strip(), f"Empty signal found"
+            assert signal.strip(), "Empty signal found"
 
     def test_all_lowercase(self) -> None:
         for signal in _BENCHMARK_SIGNALS:
@@ -154,7 +149,6 @@ class TestMemoryStoreIntegration:
 
     def test_store_and_recall(self) -> None:
         """Store a fact and recall it."""
-        import asyncio
 
         async def _run() -> None:
             from react_agent.memory import _ensure_memory_loaded
@@ -180,7 +174,6 @@ class TestMemoryStoreIntegration:
 
     def test_store_dedup(self) -> None:
         """Duplicate facts should be skipped when dedup=True."""
-        import asyncio
 
         async def _run() -> None:
             from react_agent.memory import _ensure_memory_loaded
@@ -201,7 +194,6 @@ class TestMemoryStoreIntegration:
 
     def test_clear_all(self) -> None:
         """clear_all should return count of removed docs."""
-        import asyncio
 
         async def _run() -> None:
             from react_agent.memory import _ensure_memory_loaded
@@ -218,7 +210,6 @@ class TestMemoryStoreIntegration:
 
     def test_clear_contaminated(self) -> None:
         """clear_contaminated should remove matching patterns."""
-        import asyncio
 
         async def _run() -> None:
             from react_agent.memory import _ensure_memory_loaded

@@ -22,8 +22,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from react_agent.utils import get_message_text
 
@@ -42,7 +41,7 @@ _benchmark_mode: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # Long-term memory store (Chroma)
 # ---------------------------------------------------------------------------
 
-_memory_store: Optional["MemoryStore"] = None
+_memory_store: MemoryStore | None = None
 _memory_loaded: bool = False
 
 
@@ -60,6 +59,7 @@ class MemoryStore:
     """
 
     def __init__(self, persist_dir: str, embeddings) -> None:
+        """Initialise the Chroma-backed memory store."""
         from langchain_chroma import Chroma
 
         self._db = Chroma(
@@ -70,7 +70,7 @@ class MemoryStore:
 
     # -- write path ----------------------------------------------------------
 
-    async def store(self, fact: str, metadata: Optional[dict] = None, *, dedup: bool = True) -> str:
+    async def store(self, fact: str, metadata: dict | None = None, *, dedup: bool = True) -> str:
         """Store a single fact and return its document ID.
 
         When *dedup* is True (default), a similarity check is performed first
@@ -78,7 +78,6 @@ class MemoryStore:
         (cosine distance < 0.05).  This prevents the same fact from being
         stored multiple times across sessions.
         """
-        import hashlib
         import uuid
 
         from langchain_core.documents import Document
@@ -106,7 +105,7 @@ class MemoryStore:
                 pass  # Dedup is best-effort; don't block storage on failure
 
         meta = dict(metadata or {})
-        meta.setdefault("timestamp", datetime.now(tz=timezone.utc).isoformat())
+        meta.setdefault("timestamp", datetime.now(tz=UTC).isoformat())
         meta.setdefault("type", "user_fact")
 
         doc = Document(page_content=fact_text, metadata=meta)
@@ -217,7 +216,7 @@ class MemoryStore:
 # ---------------------------------------------------------------------------
 
 
-async def _ensure_memory_loaded() -> Optional[MemoryStore]:
+async def _ensure_memory_loaded() -> MemoryStore | None:
     """Return the singleton ``MemoryStore``, creating it on first call.
 
     Degrades gracefully: returns ``None`` when Chroma or the embedding API is
@@ -285,7 +284,7 @@ async def compress_context(
     keep_last : int
         Number of recent messages to keep verbatim.  Default 10.
 
-    Returns
+    Returns:
     -------
     list
         The (possibly compressed) message list.

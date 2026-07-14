@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from react_agent.tools import (
     get_all_tools,
     get_tool_by_name,

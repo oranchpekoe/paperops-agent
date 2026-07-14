@@ -44,8 +44,7 @@ def has_mcp_config() -> bool:
 
 
 async def load_mcp_tools(config_raw: str) -> list:
-    """Parse *config_raw*, connect to all MCP servers, and return a merged
-    list of LangChain-compatible tool objects.
+    """Connect to MCP servers and return merged LangChain-compatible tools.
 
     Parameters
     ----------
@@ -53,7 +52,7 @@ async def load_mcp_tools(config_raw: str) -> list:
         Either an inline JSON string or an absolute path to a JSON file
         describing the MCP servers (see module docstring for format).
 
-    Returns
+    Returns:
     -------
     list
         LangChain tool objects from all reachable servers.  Servers that
@@ -65,7 +64,9 @@ async def load_mcp_tools(config_raw: str) -> list:
 
     # Gracefully degrade if the package is not installed
     try:
-        from langchain_mcp_adapters.client import MultiServerMCPClient  # type: ignore[import-untyped]
+        from langchain_mcp_adapters.client import (
+            MultiServerMCPClient,  # type: ignore[import-untyped]
+        )
     except ImportError:
         _logger.warning(
             "langchain-mcp-adapters is not installed — skipping MCP tools. "

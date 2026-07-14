@@ -54,9 +54,15 @@ lint.ignore = [
     # Relax the convention by _not_ requiring documentation for every function parameter.
     "D417",
     "E501",
+    # Module-level imports after environment/logging setup are intentional.
+    "E402",
 ]
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["D", "UP"]
+"tests/*" = ["D", "UP", "T201"]
+"mcp_demo_server.py" = ["D"]
+"src/react_agent/mcp.py" = ["D"]
+"src/react_agent/memory.py" = ["D"]
+"src/react_agent/modes/supervisor.py" = ["D"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

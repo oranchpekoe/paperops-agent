@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import BaseModel
-
 from react_agent.memory import (
     _BENCHMARK_SIGNALS,
     _looks_like_benchmark,
-    set_benchmark_mode,
-    _in_benchmark_mode,
 )
 from react_agent.modes.supervisor import SupervisorDecision, _parse_text_decision
-
 
 # ---------------------------------------------------------------------------
 # Supervisor text-parsing fallback

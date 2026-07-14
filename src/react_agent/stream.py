@@ -54,7 +54,7 @@ async def stream_events(query: str) -> AsyncIterator[dict]:
     query : str
         The user query to send to the agent.
 
-    Yields
+    Yields:
     ------
     dict
         Raw LangGraph event dicts.
@@ -77,7 +77,7 @@ async def stream_tokens(query: str) -> AsyncIterator[str]:
     query : str
         The user query to send to the agent.
 
-    Yields
+    Yields:
     ------
     str
         Individual text tokens from the LLM's streaming output.

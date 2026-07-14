@@ -15,7 +15,6 @@ import pytest
 
 from react_agent.memory import compress_context
 
-
 # ============================================================================
 # Unit tests — context compression (mock LLM, no API keys)
 # ============================================================================

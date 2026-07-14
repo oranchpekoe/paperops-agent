@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, List, cast
 
 from langchain_tavily import TavilySearch
 from langgraph.runtime import get_runtime
@@ -24,7 +24,7 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def search(query: str) -> Optional[dict[str, Any]]:
+async def search(query: str) -> dict[str, Any] | None:
     """Search the web for current, factual information.
 
     Use this tool whenever you need up-to-date information, facts about
@@ -332,7 +332,7 @@ async def run_mini_react_loop(
     max_rounds : int
         Maximum number of tool-calling rounds (default 3).
 
-    Returns
+    Returns:
     -------
     list
         The full message list after the loop ends (may include tool responses).
@@ -362,7 +362,7 @@ TOOLS: List[Callable[..., Any]] = [search, python_repl, retrieve]
 """All tools available to the agent.  Add new tool functions to this list."""
 
 
-def get_tool_by_name(name: str) -> Optional[Callable[..., Any]]:
+def get_tool_by_name(name: str) -> Callable[..., Any] | None:
     """Look up a tool by its function name."""
     for tool in get_all_tools():
         if getattr(tool, "__name__", "") == name:

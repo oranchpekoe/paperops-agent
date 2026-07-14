@@ -1,7 +1,6 @@
 """Day 1 trace test — run 3 different queries to see the lifecycle."""
 import asyncio
 import logging
-import os
 import sys
 
 from dotenv import load_dotenv
@@ -13,6 +12,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 load_dotenv()
 
 from react_agent.graph import graph
+
 # 从本地的react_agent/graph导入graph类
 
 
@@ -32,7 +32,7 @@ async def run_query(label: str, query: str):
 
     result = await graph.ainvoke(
         {"messages": [{"role": "user", "content": query}]},
-        config={"configurable": {"thread_id": f"trace-{category}"}},
+        config={"configurable": {"thread_id": f"trace-{label}"}},
     )
 
     # Show final answer (last message)

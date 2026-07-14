@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import warnings
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -169,8 +169,7 @@ async def _get_decision(
     *,
     default_action: str = "FINISH",
 ) -> SupervisorDecision:
-    """Invoke the model with structured output; fall back to text parsing if
-    the provider does not support it.
+    """Call model with structured output, falling back to text parsing.
 
     Parameters
     ----------
@@ -181,7 +180,7 @@ async def _get_decision(
     default_action : str
         Action to use when both structured output and text parsing fail.
 
-    Returns
+    Returns:
     -------
     SupervisorDecision
         Always returns a valid decision — never ``None``.
@@ -206,12 +205,11 @@ async def _get_decision(
 
 
 def _parse_text_decision(raw: str) -> SupervisorDecision:
-    """Parse free-text supervisor output into a ``SupervisorDecision``.
+    r"""Parse free-text supervisor output into a ``SupervisorDecision``.
 
     Handles the old prompt format (e.g. ``RESEARCH\\nSearch for GDP data``)
     as well as unstructured prose that contains keywords.
     """
-    raw_upper = raw.upper().strip()
     raw_lower = raw.lower().strip()
     first_line = raw.strip().split("\n")[0].strip().upper()
 
@@ -249,7 +247,7 @@ def _parse_text_decision(raw: str) -> SupervisorDecision:
 async def _supervisor_decide(
     state: MainState, runtime: Runtime[Context]
 ) -> Dict:
-    """Initial task analysis — pick the first specialist (or finish directly)."""
+    """Analyse the initial task and pick the first specialist (or finish directly)."""
     _trace.info("📍 [3/5] Supervisor._decide — 分析任务，选择第一个专家")
 
     model = load_chat_model(resolve_model(runtime))

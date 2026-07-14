@@ -16,14 +16,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Literal, cast
+from typing import Dict, Literal, cast
 
-# --- trace logging ---
-logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-_trace = logging.getLogger("trace")
-_trace.setLevel(logging.INFO)
-
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langgraph.graph import StateGraph
 
 from react_agent.context import Context
@@ -32,7 +27,12 @@ from react_agent.modes.react import build_react_subgraph
 from react_agent.modes.reflection import build_reflection_subgraph
 from react_agent.modes.supervisor import build_supervisor_subgraph
 from react_agent.state import MainState
-from react_agent.utils import get_message_text, load_chat_model, resolve_model
+from react_agent.utils import get_message_text, load_chat_model
+
+# --- trace logging ---
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+_trace = logging.getLogger("trace")
+_trace.setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,11 @@ async def extract_memory(state: MainState) -> Dict:
     """
     status_parts: list[str] = []
     try:
-        from react_agent.memory import _ensure_memory_loaded, compress_context, extract_facts
+        from react_agent.memory import (
+            _ensure_memory_loaded,
+            compress_context,
+            extract_facts,
+        )
 
         store = await _ensure_memory_loaded()
         if store is None:
@@ -349,6 +353,7 @@ builder.add_edge("extract_memory", "__end__")
 # whether ``LANGSMITH_LANGGRAPH_API_VARIANT`` is set (the CLI always sets
 # it to ``"local_dev"``; it is never set during standalone scripts/pytest).
 import os as _os
+
 from langgraph.checkpoint.memory import MemorySaver
 
 _checkpointer = (

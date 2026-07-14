@@ -34,6 +34,7 @@ _src = str(Path(__file__).resolve().parent.parent / "src")
 sys.path.insert(0, _src)
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Patterns that identify benchmark-derived facts (case-insensitive match)
@@ -60,8 +61,9 @@ async def cleanup(commit: bool = False) -> None:
     import logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
-    from react_agent.memory import MemoryStore
     from langchain_openai import OpenAIEmbeddings
+
+    from react_agent.memory import MemoryStore
 
     persist_dir = os.environ.get(
         "CHROMA_PERSIST_DIR",
@@ -113,8 +115,9 @@ async def nuke_all() -> None:
     import logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
-    from react_agent.memory import MemoryStore
     from langchain_openai import OpenAIEmbeddings
+
+    from react_agent.memory import MemoryStore
 
     persist_dir = os.environ.get(
         "CHROMA_PERSIST_DIR",

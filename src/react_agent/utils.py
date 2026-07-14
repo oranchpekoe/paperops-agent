@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
@@ -44,7 +43,7 @@ def load_chat_model(fully_specified_name: str) -> BaseChatModel:
     return init_chat_model(model, model_provider=provider)
 
 
-def resolve_model(runtime: Optional[Runtime[Context]] = None) -> str:
+def resolve_model(runtime: Runtime[Context] | None = None) -> str:
     """Resolve the model name from the best available source.
 
     Priority:
@@ -57,7 +56,7 @@ def resolve_model(runtime: Optional[Runtime[Context]] = None) -> str:
     return os.environ.get("MODEL", "openai/gpt-4o-mini")
 
 
-def resolve_system_prompt(runtime: Optional[Runtime[Context]] = None) -> str:
+def resolve_system_prompt(runtime: Runtime[Context] | None = None) -> str:
     """Resolve the system prompt, with the same priority as ``resolve_model``."""
     if runtime is not None and runtime.context is not None:
         return runtime.context.system_prompt

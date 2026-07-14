@@ -16,9 +16,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Dict, List, cast
+from typing import Dict, List
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph
 from langgraph.runtime import Runtime
 

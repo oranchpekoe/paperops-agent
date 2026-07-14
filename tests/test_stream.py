@@ -76,7 +76,7 @@ async def main() -> None:
         print(f"▶ {name}...")
         try:
             await test_fn()
-            print(f"  ✓ PASS\n")
+            print("  ✓ PASS\n")
             passed += 1
         except Exception as exc:
             print(f"  ✗ FAIL: {exc}\n")
