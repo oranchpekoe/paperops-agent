@@ -71,3 +71,8 @@ dev = [
     "langgraph-cli[inmem]>=0.4.10",
     "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that require external services (API keys, Chroma, LLM).",
+]

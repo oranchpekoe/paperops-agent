@@ -162,3 +162,6 @@ cython_debug/
 #.idea/
 
 .langgraph_api
+
+# Chroma persistent vector store
+.chroma_db/

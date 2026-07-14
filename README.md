@@ -1,92 +1,233 @@
-# LangGraph ReAct Agent Template
+# Multi-Mode Agent Framework
 
-[![CI](https://github.com/langchain-ai/react-agent/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/langchain-ai/react-agent/actions/workflows/unit-tests.yml)
-[![Open in - LangGraph Studio](https://img.shields.io/badge/Open_in-LangGraph_Studio-00324d.svg?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4NS4zMzMiIGhlaWdodD0iODUuMzMzIiB2ZXJzaW9uPSIxLjAiIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZD0iTTEzIDcuOGMtNi4zIDMuMS03LjEgNi4zLTYuOCAyNS43LjQgMjQuNi4zIDI0LjUgMjUuOSAyNC41QzU3LjUgNTggNTggNTcuNSA1OCAzMi4zIDU4IDcuMyA1Ni43IDYgMzIgNmMtMTIuOCAwLTE2LjEuMy0xOSAxLjhtMzcuNiAxNi42YzIuOCAyLjggMy40IDQuMiAzLjQgNy42cy0uNiA0LjgtMy40IDcuNkw0Ny4yIDQzSDE2LjhsLTMuNC0zLjRjLTQuOC00LjgtNC44LTEwLjQgMC0xNS4ybDMuNC0zLjRoMzAuNHoiLz48cGF0aCBkPSJNMTguOSAyNS42Yy0xLjEgMS4zLTEgMS43LjQgMi41LjkuNiAxLjcgMS44IDEuNyAyLjcgMCAxIC43IDIuOCAxLjYgNC4xIDEuNCAxLjkgMS40IDIuNS4zIDMuMi0xIC42LS42LjkgMS40LjkgMS41IDAgMi43LS41IDIuNy0xIDAtLjYgMS4xLS44IDIuNi0uNGwyLjYuNy0xLjgtMi45Yy01LjktOS4zLTkuNC0xMi4zLTExLjUtOS44TTM5IDI2YzAgMS4xLS45IDIuNS0yIDMuMi0yLjQgMS41LTIuNiAzLjQtLjUgNC4yLjguMyAyIDEuNyAyLjUgMy4xLjYgMS41IDEuNCAyLjMgMiAyIDEuNS0uOSAxLjItMy41LS40LTMuNS0yLjEgMC0yLjgtMi44LS44LTMuMyAxLjYtLjQgMS42LS41IDAtLjYtMS4xLS4xLTEuNS0uNi0xLjItMS42LjctMS43IDMuMy0yLjEgMy41LS41LjEuNS4yIDEuNi4zIDIuMiAwIC43LjkgMS40IDEuOSAxLjYgMi4xLjQgMi4zLTIuMy4yLTMuMi0uOC0uMy0yLTEuNy0yLjUtMy4xLTEuMS0zLTMtMy4zLTMtLjUiLz48L3N2Zz4=)](https://langgraph-studio.vercel.app/templates/open?githubUrl=https://github.com/langchain-ai/react-agent)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.0+-green.svg)](https://github.com/langchain-ai/langgraph)
 
-This template showcases a [ReAct agent](https://arxiv.org/abs/2210.03629) implemented using [LangGraph](https://github.com/langchain-ai/langgraph), designed for [LangGraph Studio](https://github.com/langchain-ai/langgraph-studio). ReAct agents are uncomplicated, prototypical agents that can be flexibly extended to many tools.
+A production-oriented multi-mode AI Agent built on LangGraph, featuring **mode routing**, **MCP protocol integration**, **RAG document retrieval**, and **Supervisor-Worker multi-agent coordination**. Designed as a showcase project for AI Agent engineering internships.
 
-![Graph view in LangGraph studio UI](./static/studio_ui.png)
+---
 
-The core logic, defined in `src/react_agent/graph.py`, demonstrates a flexible ReAct agent that iteratively reasons about user queries and executes actions, showcasing the power of this approach for complex problem-solving tasks.
+## Architecture Overview
 
-## What it does
+```
+                        ┌─────────────────────┐
+                        │     User Message     │
+                        └──────────┬──────────┘
+                                   │
+                        ┌──────────▼──────────┐
+                        │    Mode Router       │
+                        │  (LLM classifier)    │
+                        └──────────┬──────────┘
+                                   │
+          ┌────────────┬───────────┼───────────┬──────────────┐
+          │            │           │           │              │
+   ┌──────▼─────┐ ┌───▼────┐ ┌───▼─────┐ ┌───▼───────┐
+   │   ReAct    │ │Reflect │ │Plan-    │ │Supervisor │
+   │  (简单问答) │ │(写作分析)│ │Solve    │ │(多Agent) │
+   │            │ │        │ │(多步骤)  │ │           │
+   └────────────┘ └────────┘ └─────────┘ └───────────┘
+```
 
-The ReAct agent:
+Four agent architectures behind a single unified entry point. An LLM-based Mode Router analyses each incoming query and delegates to the most appropriate mode.
 
-1. Takes a user **query** as input
-2. Reasons about the query and decides on an action
-3. Executes the chosen action using available tools
-4. Observes the result of the action
-5. Repeats steps 2-4 until it can provide a final answer
+### Mode Comparison
 
-By default, it's set up with a basic set of tools, but can be easily extended with custom tools to suit various use cases.
+| Mode | Best For | Pattern | Tool Access |
+|------|----------|---------|-------------|
+| **ReAct** | Simple Q&A, factual lookups, single-step tasks | Reason → Act → Observe → Repeat | ✅ Full |
+| **Reflection** | Writing, analysis, code review, complex reasoning | Generate → Critique → Refine (×3) | ❌ Pure reasoning |
+| **Plan-Solve** | Multi-step problems, math, travel planning | Plan → Execute each step → Aggregate | ✅ Full |
+| **Supervisor** | Multi-domain tasks mixing search + computation | Decide → Delegate to specialists → Review → Repeat | ✅ Per-specialist |
+
+---
+
+## Key Features
+
+### 1. Mode Router — Intelligent Query Classification
+
+An LLM-powered router at the graph entry point analyses every user message and selects the best agent architecture. Not regex-based — it uses the same LLM to understand query semantics.
+
+### 2. MCP Protocol Integration
+
+Supports the **Model Context Protocol** for dynamic tool loading from external servers. Configure MCP servers via the `MCP_CONFIG` environment variable and tools are loaded lazily at runtime — no restart required.
+
+```json
+{
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    "transport": "stdio"
+  }
+}
+```
+
+- Eager loading on first tool use, idempotent thereafter
+- Individual server failures don't crash the agent (graceful degradation)
+- Zero-config: no `MCP_CONFIG` → agent works normally with built-in tools
+
+### 3. RAG — Local Document Retrieval
+
+Drop `.txt`, `.md`, or `.pdf` files into the `docs/` directory and the agent can search them. Powered by:
+
+- **Chroma** vector store (in-memory, no external DB)
+- **OpenAI text-embedding-3-small** (or any OpenAI-compatible embedding model)
+- **RecursiveCharacterTextSplitter** (1000-char chunks, 200-char overlap)
+- Lazy loading with singleton pattern — documents indexed once, reused across all queries
+
+### 4. Supervisor-Worker Multi-Agent Coordination
+
+A supervisor LLM orchestrates three specialist agents:
+
+```
+Supervisor
+   ├── Researcher  — search + web tools (gathers facts)
+   ├── Analyst     — pure reasoning, no tools (critiques, evaluates)
+   └── Executor    — python_repl + computation (runs calculations)
+```
+
+**Execution loop:**
+1. **Decide** — Supervisor analyses task, picks first specialist
+2. **Delegate** — Specialist runs (with up to 3 rounds of ReAct if it has tools)
+3. **Review** — Supervisor evaluates all output, decides: `RESEARCH | EXECUTE | ANALYSE | ANSWER`
+4. **Repeat** (up to 5 iterations) or **Finish** with a synthesised final answer
+
+Example for *"Research Japan's 2024 GDP and calculate 5% of it"*:
+```
+Router → supervisor
+  Decide → "RESEARCH"  → Researcher searches GDP data
+  Review → "EXECUTE"   → Executor calculates 5%
+  Review → "ANSWER"    → Supervisor synthesises final answer
+```
+
+---
+
+## Project Structure
+
+```
+react-agent/
+├── src/react_agent/
+│   ├── graph.py              # Main orchestrator (router + 4 subgraphs)
+│   ├── state.py              # Shared state definitions
+│   ├── tools.py              # Tool registry (search, python_repl, retrieve + MCP)
+│   ├── mcp.py                # MCP client wrapper
+│   ├── context.py            # Runtime context / configuration
+│   ├── prompts.py            # Default system prompts
+│   ├── utils.py              # Model loading helpers
+│   └── modes/
+│       ├── react.py          # ReAct subgraph
+│       ├── reflection.py     # Reflection subgraph (Generate → Critique → Refine)
+│       ├── plan_solve.py     # Plan-Solve subgraph (Plan → Execute → Aggregate)
+│       └── supervisor.py     # Supervisor-Worker subgraph (multi-agent)
+├── docs/
+│   └── project-overview.md   # Sample document for RAG testing
+├── tests/
+│   ├── test_trace.py         # End-to-end trace test (4 query types)
+│   ├── unit_tests/           # Unit tests (configuration, etc.)
+│   └── integration_tests/    # Integration tests (graph compilation, routing)
+├── pyproject.toml
+├── .env.example
+└── langgraph.json
+```
+
+---
 
 ## Getting Started
 
-Assuming you have already [installed LangGraph Studio](https://github.com/langchain-ai/langgraph-studio?tab=readme-ov-file#download), to set up:
+### Prerequisites
 
-1. Create a `.env` file.
+- Python 3.11+
+- [Tavily API key](https://tavily.com) for web search
+- An LLM API key (OpenAI-compatible by default)
+
+### Setup
 
 ```bash
+# 1. Clone and navigate
+cd react-agent
+
+# 2. Install dependencies (uv recommended)
+pip install uv
+uv sync
+
+# 3. Configure environment
 cp .env.example .env
+# Edit .env with your API keys
+
+# 4. (Optional) Install MCP support
+pip install langchain-mcp-adapters
+
+# 5. (Optional) Add documents for RAG
+mkdir docs
+echo "# My Knowledge Base" > docs/project-info.md
 ```
 
-2. Define required API keys in your `.env` file.
+### Environment Variables
 
-The primary [search tool](./src/react_agent/tools.py) [^1] used is [Tavily](https://tavily.com/). Create an API key [here](https://app.tavily.com/sign-in).
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | ✅ | LLM API key (aihubmix or any OpenAI-compatible) |
+| `OPENAI_BASE_URL` | ✅ | API base URL (default: `https://aihubmix.com/v1`) |
+| `MODEL` | ✅ | Model name, e.g. `openai/deepseek-v4-flash` |
+| `TAVILY_API_KEY` | ✅ | Tavily search API key |
+| `MCP_CONFIG` | ❌ | JSON string or file path for MCP servers |
+| `DOCS_DIR` | ❌ | Custom docs directory (default: `./docs`) |
+| `EMBEDDING_MODEL` | ❌ | Embedding model (default: `text-embedding-3-small`) |
+| `MAX_SEARCH_RESULTS` | ❌ | Max search results per query (default: 5) |
 
-### Setup Model
+### Running
 
-The defaults values for `model` are shown below:
-
-```yaml
-model: claude-sonnet-4-5-20250929
+**LangGraph Studio (recommended for development):**
+```cmd
+REM Windows — two separate commands
+set PYTHONUTF8=1
+langgraph dev --port 1024 --allow-blocking
 ```
 
-Follow the instructions below to get set up, or pick one of the additional options.
-
-#### Anthropic
-
-To use Anthropic's chat models:
-
-1. Sign up for an [Anthropic API key](https://console.anthropic.com/) if you haven't already.
-2. Once you have your API key, add it to your `.env` file:
-
-```
-ANTHROPIC_API_KEY=your-api-key
-```
-#### OpenAI
-
-To use OpenAI's chat models:
-
-1. Sign up for an [OpenAI API key](https://platform.openai.com/signup).
-2. Once you have your API key, add it to your `.env` file:
-```
-OPENAI_API_KEY=your-api-key
+**CLI / direct invocation:**
+```bash
+python tests/test_trace.py
 ```
 
-3. Customize whatever you'd like in the code.
-4. Open the folder LangGraph Studio!
+**Programmatic use:**
+```python
+from react_agent.graph import graph
 
-## How to customize
+result = await graph.ainvoke({
+    "messages": [{"role": "user", "content": "What is the capital of France?"}]
+})
+print(result["messages"][-1].content)
+```
 
-1. **Add new tools**: Extend the agent's capabilities by adding new tools in [tools.py](./src/react_agent/tools.py). These can be any Python functions that perform specific tasks.
-2. **Select a different model**: We default to Anthropic's Claude 3 Sonnet. You can select a compatible chat model using `provider/model-name` via runtime context. Example: `openai/gpt-4-turbo-preview`.
-3. **Customize the prompt**: We provide a default system prompt in [prompts.py](./src/react_agent/prompts.py). You can easily update this via context in the studio.
+---
 
-You can also quickly extend this template by:
+## Testing
 
-- Modifying the agent's reasoning process in [graph.py](./src/react_agent/graph.py).
-- Adjusting the ReAct loop or adding additional steps to the agent's decision-making process.
+```bash
+# Full trace test (4 query types across all modes)
+python tests/test_trace.py
 
-## Development
+# Unit tests
+pytest tests/unit_tests/ -v
 
-While iterating on your graph, you can edit past state and rerun your app from past states to debug specific nodes. Local changes will be automatically applied via hot reload. Try adding an interrupt before the agent calls tools, updating the default system message in `src/react_agent/context.py` to take on a persona, or adding additional nodes and edges!
+# Integration tests
+pytest tests/integration_tests/ -v
+```
 
-Follow up requests will be appended to the same thread. You can create an entirely new thread, clearing previous history, using the `+` button in the top right.
+---
 
-You can find the latest (under construction) docs on [LangGraph](https://github.com/langchain-ai/langgraph) here, including examples and other references. Using those guides can help you pick the right patterns to adapt here for your use case.
+## Design Decisions
 
-LangGraph Studio also integrates with [LangSmith](https://smith.langchain.com/) for more in-depth tracing and collaboration with teammates.
+### Why `--allow-blocking`?
+The `langgraph dev` ASGI server detects synchronous blocking calls to protect the event loop. Our `python_repl` tool uses Python's `eval()` synchronously, and `Chroma.from_documents()` internally calls `tiktoken` → `os.getcwd()`. Both trigger the block detector. We've wrapped the Chroma call in `asyncio.to_thread()`, but `eval()` is CPU-bound and doesn't benefit from threading. The `--allow-blocking` flag is LangGraph's intended escape hatch — production deployments using `langgraph serve` with dedicated workers don't face this constraint.
 
-[^1]: https://python.langchain.com/docs/concepts/#tools
+### Why Text-Based Supervisor Parsing?
+The initial implementation used structured text parsing (prefix matching + keyword fallback) for supervisor decisions. This works but is fragile — different LLMs or query phrasings can produce unexpected output formats, causing the parser to default to `FINISH`. A migration to **structured output** (Pydantic models with `with_structured_output()`) is planned to guarantee parseable decisions regardless of model behaviour.
+
+### Why All Tools in Every Mode?
+Rather than restricting tools per mode, all tools are available everywhere. The LLM's system prompt guides *which* tools to use when. This keeps the tool registry simple and lets the LLM exercise judgment — a Researcher might still need `python_repl` for a quick calculation within a research task.
+
+---
+
+## License
+
+MIT
