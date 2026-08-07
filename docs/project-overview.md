@@ -1,6 +1,6 @@
 # Multi-Mode Agent Framework — 项目全景
 
-> 归档说明：本文描述 `v0.1-multimode-demo`。当前 PaperOps 产品范围见 [product-spec.md](product-spec.md)。
+> 归档说明：本文描述 [`v0.1-multimode-demo`](https://github.com/oranchpekoe/paperops-agent/tree/v0.1-multimode-demo)，文中的代码路径均属于该标签。当前 PaperOps 产品范围见 [product-spec.md](product-spec.md)。
 
 > 最后一次更新：2026-06-08。覆盖 4 模式、MCP、RAG、三层记忆、流式输出、Eval 框架。
 

@@ -1,6 +1,6 @@
 # PaperOps 工程约定
 
-本文约束 PaperOps 新代码。`src/react_agent` 是迁移期间保留的 v0.1 原型，不作为新代码范例；需要复用的能力应按本约定迁入 `src/paperops`，而不是直接复制旧实现。
+本文约束 PaperOps 产品代码。早期 `react_agent` 原型只保留在 `v0.1-multimode-demo` 标签中，不作为当前代码范例。
 
 ## 1. 类型边界
 

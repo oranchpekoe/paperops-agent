@@ -1,6 +1,6 @@
 # 优化冲刺总结 — 2026-06-08
 
-> 归档说明：本文记录 `v0.1-multimode-demo` 的故障排查与优化，保留为工程复盘材料。
+> 归档说明：本文记录 [`v0.1-multimode-demo`](https://github.com/oranchpekoe/paperops-agent/tree/v0.1-multimode-demo) 的故障排查与优化，文中的代码路径均属于该标签，保留为工程复盘材料。
 
 ## 概述
 
