@@ -1,6 +1,6 @@
 # 数据流追踪：从用户输入到最终回答
 
-> 归档说明：以下追踪来自 `v0.1-multimode-demo`，用于保留历史调试证据。
+> 归档说明：以下追踪来自 [`v0.1-multimode-demo`](https://github.com/oranchpekoe/paperops-agent/tree/v0.1-multimode-demo)，文中的代码路径均属于该标签，用于保留历史调试证据。
 
 > 本文用 4 个具体 query 完整追踪 `state.messages` 在每个节点的变化。
 > 理解 messages 的流转是理解整个框架的关键。

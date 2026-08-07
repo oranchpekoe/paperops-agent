@@ -1,6 +1,6 @@
 # 项目缺口分析与改进计划
 
-> 归档说明：本文评估 `v0.1-multimode-demo` 原型，不代表当前 PaperOps 产品已经实现这些能力。
+> 归档说明：本文评估 [`v0.1-multimode-demo`](https://github.com/oranchpekoe/paperops-agent/tree/v0.1-multimode-demo) 原型，文中的代码路径均属于该标签，不代表当前 PaperOps 产品已经实现这些能力。
 
 > 本文档记录对 Multi-Mode Agent Framework 项目的全面审查结果，包括已识别的缺口、严重程度评级和已完成的改进措施。
 

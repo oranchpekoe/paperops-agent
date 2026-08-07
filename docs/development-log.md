@@ -1,6 +1,6 @@
 # 开发日志与Bug修复记录
 
-> 归档说明：本文记录 `v0.1-multimode-demo` 原型的开发过程。当前 PaperOps 产品范围以 [product-spec.md](product-spec.md) 为准。
+> 归档说明：本文记录 [`v0.1-multimode-demo`](https://github.com/oranchpekoe/paperops-agent/tree/v0.1-multimode-demo) 原型的开发过程，文中的代码路径均属于该标签。当前 PaperOps 产品范围以 [product-spec.md](product-spec.md) 为准。
 
 ## 开发日志
 

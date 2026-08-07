@@ -2,7 +2,7 @@
   "$schema": "https://langgra.ph/schema.json",
   "dependencies": ["."],
   "graphs": {
-    "legacy_multi_mode_agent": "./src/react_agent/graph.py:graph"
+    "paperops": "./src/paperops/graph.py:graph"
   },
   "env": ".env"
 }
