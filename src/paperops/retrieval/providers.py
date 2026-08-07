@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -46,12 +47,15 @@ class FastEmbedProvider:
     ) -> None:
         """Load one supported FastEmbed model, downloading it if absent."""
         try:
-            from fastembed import TextEmbedding
+            text_embedding = getattr(
+                importlib.import_module("fastembed"),
+                "TextEmbedding",
+            )
         except ImportError as exc:
             raise _fastembed_import_error() from exc
         self.model_name = model_name
         self.name = f"fastembed:{model_name}"
-        self._model: Any = TextEmbedding(
+        self._model: Any = text_embedding(
             model_name=model_name,
             cache_dir=str(cache_dir),
             threads=threads,
@@ -81,12 +85,15 @@ class FastEmbedReranker:
     ) -> None:
         """Load one supported FastEmbed cross encoder."""
         try:
-            from fastembed.rerank.cross_encoder import TextCrossEncoder
+            text_cross_encoder = getattr(
+                importlib.import_module("fastembed.rerank.cross_encoder"),
+                "TextCrossEncoder",
+            )
         except ImportError as exc:
             raise _fastembed_import_error() from exc
         self.model_name = model_name
         self.name = f"fastembed-reranker:{model_name}"
-        self._model: Any = TextCrossEncoder(
+        self._model: Any = text_cross_encoder(
             model_name=model_name,
             cache_dir=str(cache_dir),
             threads=threads,
