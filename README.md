@@ -1,6 +1,6 @@
 # PaperOps Agent
 
-[![CI](https://github.com/oranchpekoe/multi-mode-agent/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/oranchpekoe/multi-mode-agent/actions/workflows/unit-tests.yml)
+[![CI](https://github.com/oranchpekoe/paperops-agent/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/oranchpekoe/paperops-agent/actions/workflows/unit-tests.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
 面向实验室科研文献的解析、质量验收与知识库入库工作流。
@@ -73,7 +73,7 @@ tests/                        # 单元、集成和后续评测
 docs/                         # 产品约束、上游归属和技术复盘
 ```
 
-仓库目录使用连字符 `multi-mode-agent`，Python 包使用合法标识符 `paperops`。`src/` 布局用于确保测试验证的是正确安装后的包，而不是碰巧从仓库根目录导入源码。
+仓库名和 Python 分发包使用连字符 `paperops-agent`，Python 导入包使用合法标识符 `paperops`。`src/` 布局用于确保测试验证的是正确安装后的包，而不是碰巧从仓库根目录导入源码。
 
 新代码的类型边界、结构化输出和 Prompt 角色约定见 [工程约定](docs/engineering-conventions.md)。
 

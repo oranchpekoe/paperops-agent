@@ -43,7 +43,7 @@ api = [
 ]
 
 [project.urls]
-Repository = "https://github.com/oranchpekoe/multi-mode-agent"
+Repository = "https://github.com/oranchpekoe/paperops-agent"
 Upstream = "https://github.com/langchain-ai/react-agent"
 
 [build-system]
