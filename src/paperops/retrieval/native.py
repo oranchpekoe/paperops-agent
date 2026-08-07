@@ -34,6 +34,18 @@ _STOP_WORDS = {
 }
 
 
+def stable_document_id(idempotency_key: str) -> str:
+    """Derive one backend-independent local document identifier."""
+    digest = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    return f"native-{digest[:20]}"
+
+
+def stable_chunk_id(document_id: str, ordinal: int, content: str) -> str:
+    """Derive a stable chunk identifier shared by local retrievers."""
+    digest = hashlib.sha256(f"{document_id}:{ordinal}:{content}".encode()).hexdigest()
+    return f"chunk-{digest[:20]}"
+
+
 def _match_expression(query: str) -> str:
     """Convert untrusted query text into a bounded FTS5 OR expression."""
     terms: list[str] = []
@@ -116,8 +128,7 @@ class NativeRetrievalBackend:
         if not chunks:
             raise ValueError("The parsed Markdown did not produce any indexable chunks")
 
-        document_digest = hashlib.sha256(request.idempotency_key.encode()).hexdigest()
-        document_id = f"native-{document_digest[:20]}"
+        document_id = stable_document_id(request.idempotency_key)
         with self._write_lock, self._connect() as connection:
             existing = connection.execute(
                 """
@@ -156,9 +167,6 @@ class NativeRetrievalBackend:
                 ),
             )
             for chunk in chunks:
-                chunk_digest = hashlib.sha256(
-                    f"{document_id}:{chunk.ordinal}:{chunk.content}".encode()
-                ).hexdigest()
                 connection.execute(
                     """
                     INSERT INTO native_chunks (
@@ -170,7 +178,7 @@ class NativeRetrievalBackend:
                     ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
-                        f"chunk-{chunk_digest[:20]}",
+                        stable_chunk_id(document_id, chunk.ordinal, chunk.content),
                         document_id,
                         request.knowledge_base,
                         "\n".join(chunk.heading_path),
@@ -208,7 +216,7 @@ class NativeRetrievalBackend:
                 bm25(native_chunks, 0.0, 0.0, 0.0, 2.0, 1.0) AS rank
             FROM native_chunks
             WHERE {" AND ".join(conditions)}
-            ORDER BY rank
+            ORDER BY rank, chunk_id
             LIMIT ?
         """
         with self._connect() as connection:

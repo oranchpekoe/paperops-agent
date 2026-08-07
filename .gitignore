@@ -178,6 +178,8 @@ paperops-index.db-shm
 paperops-index.db-wal
 .tools/
 .uv-cache/
+.paperops-eval/
+.paperops-models/
 
 # Local assistant configuration
 .claude/settings.local.json
