@@ -14,6 +14,7 @@ from paperops.models import IngestRequest, IngestResult, SearchHit, SearchReques
 from paperops.retrieval.dense import DenseRetrievalBackend
 from paperops.retrieval.hybrid import HybridRetrievalBackend, RerankedRetrievalBackend
 from paperops.retrieval.native import NativeRetrievalBackend
+from paperops.retrieval.providers import FastEmbedProvider
 from paperops.settings import Settings
 
 
@@ -140,6 +141,22 @@ def test_default_native_profile_does_not_load_optional_models(
     backend = _build_retrieval_backend(_settings(tmp_path))
 
     assert isinstance(backend, NativeRetrievalBackend)
+
+
+def test_optional_model_provider_has_actionable_install_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_module(name: str) -> None:
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(
+        "paperops.retrieval.providers.importlib.import_module",
+        missing_module,
+    )
+
+    with pytest.raises(RuntimeError, match="uv sync --extra retrieval-models"):
+        FastEmbedProvider("missing-model", cache_dir=tmp_path)
 
 
 @pytest.mark.asyncio
