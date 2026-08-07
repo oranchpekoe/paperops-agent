@@ -11,7 +11,7 @@ from typing import Any
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from paperops.clients.protocols import KnowledgeBaseClient, ParserClient
+from paperops.clients.protocols import ParserClient, RetrievalBackend
 from paperops.models import (
     ApprovalAction,
     ApprovalDecision,
@@ -27,6 +27,7 @@ from paperops.models import (
     WorkflowFailure,
 )
 from paperops.quality.rules import QualityPolicy, evaluate_markdown
+from paperops.retrieval.chunking import build_index_probe
 from paperops.settings import Settings
 from paperops.state import DocumentJobState
 
@@ -87,7 +88,7 @@ class WorkflowNodes:
     """Hold workflow dependencies while keeping graph state serialisable."""
 
     parser: ParserClient
-    knowledge_base: KnowledgeBaseClient
+    knowledge_base: RetrievalBackend
     settings: Settings
     quality_policy: QualityPolicy
 
@@ -229,7 +230,7 @@ class WorkflowNodes:
             "events": [
                 WorkflowEvent(
                     status=JobStatus.WAITING_APPROVAL,
-                    message="Human review is required before ingestion.",
+                    message="Human review is required before indexing.",
                     attempt=state.get("parse_attempts"),
                 )
             ],
@@ -269,12 +270,12 @@ class WorkflowNodes:
             return update
 
         return {
-            "status": JobStatus.UPLOADING,
+            "status": JobStatus.INDEXING,
             "approval_decision": decision,
             "events": [
                 WorkflowEvent(
-                    status=JobStatus.UPLOADING,
-                    message="Reviewer approved the artifact for ingestion.",
+                    status=JobStatus.INDEXING,
+                    message="Reviewer approved the artifact for indexing.",
                 )
             ],
         }
@@ -312,22 +313,23 @@ class WorkflowNodes:
             result = await self.knowledge_base.ingest(request)
         except Exception as exc:
             failure = WorkflowFailure(
-                stage=JobStatus.UPLOADING,
-                code=FailureCode.INGEST_ERROR,
+                stage=JobStatus.INDEXING,
+                code=FailureCode.INDEX_ERROR,
                 message=f"{type(exc).__name__}: {exc}",
             )
-            return _failure_update(failure, "Knowledge-base ingestion failed.")
+            return _failure_update(failure, "Document indexing failed.")
 
         return {
             "status": JobStatus.RETRIEVAL_EVAL,
-            "ragflow_document_id": result.document_id,
+            "indexed_document_id": result.document_id,
+            "indexed_chunk_count": result.chunk_count,
             "events": [
                 WorkflowEvent(
-                    status=JobStatus.UPLOADING,
+                    status=JobStatus.INDEXING,
                     message=(
-                        "Knowledge-base document created."
+                        "Indexed document created."
                         if result.created
-                        else "Existing knowledge-base document reused."
+                        else "Existing indexed document reused."
                     ),
                 )
             ],
@@ -335,14 +337,19 @@ class WorkflowNodes:
 
     async def evaluate_retrieval(self, state: DocumentJobState) -> dict[str, Any]:
         """Verify that the expected document can supply retrieval evidence."""
-        source_name = Path(state["source_pdf"]).stem.replace("_", " ")
-        query = f"What evidence was indexed for {source_name}?"
-        request = SearchRequest(
-            knowledge_base=state["target_knowledge_base"],
-            query=query,
-            expected_document_id=state["ragflow_document_id"],
-        )
         try:
+            markdown = await asyncio.to_thread(
+                Path(state["parsed_markdown_path"]).read_text,
+                encoding="utf-8",
+            )
+            source_name = Path(state["source_pdf"]).stem.replace("_", " ")
+            query = build_index_probe(markdown, source_name)
+            request = SearchRequest(
+                knowledge_base=state["target_knowledge_base"],
+                query=query,
+                expected_document_id=state["indexed_document_id"],
+                top_k=self.settings.retrieval_probe_top_k,
+            )
             hits = await self.knowledge_base.search(request)
         except Exception as exc:
             failure = WorkflowFailure(
@@ -353,14 +360,16 @@ class WorkflowNodes:
             return _failure_update(failure, "Retrieval verification failed to run.")
 
         matching_hits = [
-            hit for hit in hits if hit.document_id == state["ragflow_document_id"]
+            hit for hit in hits if hit.document_id == state["indexed_document_id"]
         ]
         passed = len(matching_hits) >= self.settings.min_retrieval_hits
         report = RetrievalReport(
             passed=passed,
             query=query,
-            document_id=state["ragflow_document_id"],
+            document_id=state["indexed_document_id"],
             hit_count=len(matching_hits),
+            backend=self.knowledge_base.name,
+            strategy="document_scoped_index_probe",
             evidence=[hit.content for hit in matching_hits[:3]],
         )
         report_path = (
@@ -394,7 +403,7 @@ class WorkflowNodes:
             "events": [
                 WorkflowEvent(
                     status=JobStatus.COMPLETED,
-                    message="Document ingestion and retrieval verification completed.",
+                    message="Document indexing and retrieval probe completed.",
                 )
             ],
         }

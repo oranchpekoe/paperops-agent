@@ -8,13 +8,13 @@ from pydantic import BaseModel, Field
 
 
 class JobStatus(StrEnum):
-    """Lifecycle states for a single-document ingestion job."""
+    """Lifecycle states for a single-document indexing job."""
 
     PENDING = "pending"
     PARSING = "parsing"
     QUALITY_CHECK = "quality_check"
     WAITING_APPROVAL = "waiting_approval"
-    UPLOADING = "uploading"
+    INDEXING = "indexing"
     RETRIEVAL_EVAL = "retrieval_eval"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -44,7 +44,7 @@ class FailureCode(StrEnum):
     QUALITY_RETRIES_EXHAUSTED = "quality_retries_exhausted"
     INVALID_APPROVAL = "invalid_approval"
     APPROVAL_REJECTED = "approval_rejected"
-    INGEST_ERROR = "ingest_error"
+    INDEX_ERROR = "index_error"
     RETRIEVAL_ERROR = "retrieval_error"
     RETRIEVAL_FAILED = "retrieval_failed"
 
@@ -98,27 +98,31 @@ class IngestRequest(BaseModel):
 
 
 class IngestResult(BaseModel):
-    """Knowledge-base document identity returned after ingestion."""
+    """Indexed document identity returned by a retrieval backend."""
 
     document_id: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
     created: bool
+    chunk_count: int = Field(default=0, ge=0)
 
 
 class SearchRequest(BaseModel):
-    """Retrieval request used to verify one ingested document."""
+    """Retrieval request used for search or document-scoped verification."""
 
     knowledge_base: str = Field(min_length=1)
     query: str = Field(min_length=1)
-    expected_document_id: str = Field(min_length=1)
+    expected_document_id: str | None = None
+    top_k: int = Field(default=10, ge=1, le=100)
 
 
 class SearchHit(BaseModel):
-    """Small evidence snippet returned by a knowledge-base client."""
+    """Evidence chunk returned by a retrieval backend."""
 
     document_id: str = Field(min_length=1)
+    chunk_id: str | None = None
     content: str
     score: float = Field(ge=0.0, le=1.0)
+    heading_path: list[str] = Field(default_factory=list)
 
 
 class ApprovalDecision(BaseModel):
@@ -129,12 +133,14 @@ class ApprovalDecision(BaseModel):
 
 
 class RetrievalReport(BaseModel):
-    """Structured result of post-ingestion retrieval verification."""
+    """Structured result of a post-indexing retrieval probe."""
 
     passed: bool
     query: str = Field(min_length=1)
     document_id: str = Field(min_length=1)
     hit_count: int = Field(ge=0)
+    backend: str = "unknown"
+    strategy: str = "index_probe"
     evidence: list[str] = Field(default_factory=list)
 
 

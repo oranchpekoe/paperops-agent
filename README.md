@@ -3,9 +3,9 @@
 [![CI](https://github.com/oranchpekoe/paperops-agent/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/oranchpekoe/paperops-agent/actions/workflows/unit-tests.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-面向实验室科研文献的解析、质量验收与知识库入库工作流。
+面向实验室科研文献的解析、质量验收、结构化切片与检索工作流。
 
-PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个可以验证的具体问题：**PDF 被 MinerU 成功解析并上传 RAGFlow，并不代表知识库真正可用**。双栏排版、公式、表格、图片和扫描页可能产生隐蔽的内容缺失，需要一条可重试、可人工审核、可恢复并能进行检索验收的处理链路。
+PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个可以验证的具体问题：**PDF 被解析并写入索引，不代表证据能够被可靠召回**。双栏排版、公式、表格、图片和扫描页可能产生隐蔽的内容缺失；不透明的切片和检索策略又会掩盖召回失败，因此需要一条可重试、可人工审核、可恢复且检索过程可评测的处理链路。
 
 ## 当前状态
 
@@ -13,11 +13,11 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 
 - `v0.1-multimode-demo`：已归档的四模式 Agent 学习原型；
 - PR1：完成产品边界、包结构、依赖和上游归属整理；
-- 当前 PR2：使用 Fake Parser/Knowledge Base Client 跑通单文档状态机、重试、人工中断、checkpoint 恢复和幂等入库；
-- PR3：接入真实服务、持久化和人工审批 API；
-- PR4：构建公开论文评测集并与“直接解析上传”基线对比。
+- PR2：使用 Fake Parser/Retrieval Backend 跑通单文档状态机、重试、人工中断、checkpoint 恢复和幂等入库；
+- 当前 PR3：接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
+- PR4：增加稠密召回、融合与重排，并用公开论文评测集比较 Recall@K、MRR、延迟和人工介入率。
 
-> 当前 `langgraph.json` 暴露的是可执行 PaperOps 图，但 PR2 的外部服务均为确定性 Fake Client，不代表已经接入 MinerU 或 RAGFlow。
+> `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
 ## 目标用户与输入输出
 
@@ -28,9 +28,9 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 **输出**：
 
 - MinerU 解析产物及质量报告；
-- RAGFlow 文档 ID 和索引状态；
-- 基于文档生成的检索测试集；
-- 检索命中与答案依据验收报告；
+- 原生索引文档 ID、Chunk 数量和标题路径；
+- 一条文档级探测问题及其检索证据；
+- 检索命中验收报告；
 - 失败原因、重试记录和人工审核记录。
 
 ## MVP 工作流
@@ -40,22 +40,17 @@ flowchart TD
     A["登记 PDF 与文件哈希"] --> B["调用 MinerU 解析"]
     B --> C["规则质量检查"]
     C --> D{"结果是否明确？"}
-    D -->|"合格"| E["上传 RAGFlow"]
+    D -->|"合格"| E["按标题结构切片并写入索引"]
     D -->|"明显失败"| F["调整策略后重试"]
-    D -->|"无法判断"| G["LLM 语义质检"]
-    G --> H{"置信度足够？"}
-    H -->|"是"| E
-    H -->|"否"| I["等待人工审核"]
+    D -->|"无法判断"| I["等待人工审核"]
     I --> E
     F --> B
-    E --> J["生成检索测试问题"]
-    J --> K["检索与依据验收"]
+    E --> J["生成文档级索引探测问题"]
+    J --> K["BM25 检索与证据探测"]
     K --> L["输出质量报告"]
 ```
 
-稳定步骤由普通代码执行，LLM 只处理规则无法可靠判断的语义质量问题。解析正文保存在 artifact 目录，LangGraph State 只保存路径、状态和结构化决策，避免大型文档反复进入 checkpoint。
-
-PR2 尚未引入 LLM 语义质检：规则无法可靠判断时直接通过 LangGraph `interrupt()` 进入人工审核。这样可以先独立验证恢复语义和副作用边界，再在后续 PR 中评估 LLM 是否真正降低人工介入率。
+稳定步骤由普通代码执行。解析正文保存在 artifact 目录，LangGraph State 只保存路径、状态和结构化决策，避免大型文档反复进入 checkpoint。当前规则无法可靠判断时直接通过 LangGraph `interrupt()` 进入人工审核；是否增加 LLM 语义质检留给后续评测决定，而不是预设它一定有效。
 
 ## 仓库结构
 
@@ -66,11 +61,16 @@ src/paperops/
 ├── state.py                  # 只保存引用和小型决策的 Graph State
 ├── settings.py               # PAPEROPS_* 环境配置
 ├── clients/
-│   ├── protocols.py          # Parser/Knowledge Base 能力协议
-│   └── fakes.py              # 幂等 Fake Client 与故障注入
+│   ├── protocols.py          # Parser/Retrieval Backend 能力协议
+│   ├── fakes.py              # 幂等 Fake Client 与故障注入
+│   ├── mineru.py             # 官方异步任务 API、恢复 manifest 与安全解压
+│   └── ragflow.py            # 文档上传、索引轮询与检索适配器
+├── retrieval/
+│   ├── chunking.py           # 标题感知切片与确定性探测问题
+│   └── native.py             # SQLite FTS5/BM25 默认检索后端
 ├── quality/rules.py          # 确定性 Markdown 质量门
 ├── nodes/workflow.py         # 领域节点与人工 interrupt
-└── api/                      # PR3: FastAPI 与人工审批
+└── api/                      # FastAPI、线程运行器与人工审批/恢复
 
 knowledge/                    # 本地论文输入，不提交 Git
 tests/                        # 单元、集成和后续评测
@@ -85,9 +85,9 @@ docs/                         # 产品约束、上游归属和技术复盘
 
 前置条件：
 
-- Python 3.11 或 3.12；
+- Python 3.11+；
 - [uv](https://docs.astral.sh/uv/)；
-- PR2 的完整单元测试和本地 Fake 工作流不需要任何 API Key。
+- Fake 工作流和 HTTP 契约测试不需要任何 API Key。
 
 安装锁定的开发依赖：
 
@@ -100,6 +100,7 @@ uv sync --frozen
 ```bash
 uv run ruff check .
 uv run pytest tests/unit_tests -q
+uv run mypy src
 ```
 
 准备任意本地 `.pdf` 文件后，可以启动 LangGraph Studio 调试 Fake 工作流：
@@ -118,6 +119,57 @@ uv run langgraph dev
 }
 ```
 
+## PR3 作业 API
+
+复制配置并启动本地 Fake 服务：
+
+```bash
+cp .env.example .env
+uv run paperops-api
+```
+
+提交单篇 PDF 后会立即得到 `thread_id`；处理在后台执行，状态写入 SQLite：
+
+```bash
+curl -X POST http://127.0.0.1:8080/jobs \
+  -F "target_knowledge_base=uav-papers" \
+  -F "file=@knowledge/example.pdf"
+
+curl http://127.0.0.1:8080/jobs/<thread_id>
+```
+
+当 `approval_required=true` 时恢复人工中断：
+
+```bash
+curl -X POST http://127.0.0.1:8080/jobs/<thread_id>/approval \
+  -H "Content-Type: application/json" \
+  -d '{"action":"approve","note":"checked against the PDF"}'
+```
+
+服务在非人工节点中断或重启后，可以显式调用 `POST /jobs/<thread_id>/resume` 从最近 checkpoint 继续。接口详情见启动后的 `/docs`，恢复边界见 [PR3 运行时说明](docs/pr3-runtime.md)。
+
+真实模式默认只要求启动官方 `mineru-api`。Markdown 由 PaperOps 自己切片并写入本地 SQLite FTS5 索引：
+
+```dotenv
+PAPEROPS_CLIENT_MODE=real
+PAPEROPS_MINERU_BASE_URL=http://localhost:8000
+PAPEROPS_RETRIEVAL_BACKEND=native
+PAPEROPS_NATIVE_INDEX_DB=paperops-index.db
+```
+
+MinerU 适配器遵循官方 `/tasks`、`/tasks/{task_id}`、`/tasks/{task_id}/result` 异步流程。原生后端按 Markdown 标题边界切片，保留标题路径和 Chunk ID，使用 FTS5 的 BM25 排序；这一实现是可解释的关键词检索基线，不宣称已经具备语义召回能力。
+
+RAGFlow 适配器保留为可选外部后端和后续评测基线。只有显式设置 `PAPEROPS_RETRIEVAL_BACKEND=ragflow` 时才需要 RAGFlow 地址和 API Key。
+
+准备一篇测试 PDF 后，可显式运行 MinerU 到原生索引的冒烟测试；索引写入 pytest 临时目录，不会修改长期知识库：
+
+```bash
+PAPEROPS_RUN_LIVE_INTEGRATION=1 \
+PAPEROPS_INTEGRATION_PDF=knowledge/example.pdf \
+PAPEROPS_INTEGRATION_COLLECTION_ID=uav-papers \
+uv run pytest tests/integration_tests -m integration -s
+```
+
 ## 配置边界
 
 PaperOps 配置统一使用 `PAPEROPS_` 前缀：
@@ -126,13 +178,26 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 |---|---|---|
 | `PAPEROPS_ARTIFACTS_DIR` | `artifacts` | 解析产物和报告目录 |
 | `PAPEROPS_KNOWLEDGE_DIR` | `knowledge` | 本地科研文献输入目录 |
+| `PAPEROPS_CHECKPOINT_DB` | `paperops.db` | LangGraph SQLite checkpoint 文件 |
+| `PAPEROPS_CLIENT_MODE` | `fake` | `fake` 本地模式或 `real` 真实服务模式 |
+| `PAPEROPS_MINERU_BASE_URL` | `http://localhost:8000` | 自托管 `mineru-api` 地址 |
+| `PAPEROPS_MINERU_BACKEND` | `pipeline` | MinerU 解析后端 |
+| `PAPEROPS_EXTERNAL_TRUST_ENV` | `false` | 外部 HTTP客户端是否继承系统代理；本地服务默认关闭 |
+| `PAPEROPS_RETRIEVAL_BACKEND` | `native` | `native` 默认后端或可选 `ragflow` 适配器 |
+| `PAPEROPS_NATIVE_INDEX_DB` | `paperops-index.db` | 原生文档和 FTS5 Chunk 索引 |
+| `PAPEROPS_NATIVE_CHUNK_SIZE_CHARS` | `1200` | 单个结构化 Chunk 的最大字符数 |
+| `PAPEROPS_NATIVE_CHUNK_OVERLAP_CHARS` | `160` | 同一章节内相邻 Chunk 重叠字符数 |
+| `PAPEROPS_NATIVE_SEARCH_TOP_K` | `10` | BM25 候选数量上限 |
+| `PAPEROPS_RETRIEVAL_PROBE_TOP_K` | `10` | 文档级索引探测的候选数量 |
+| `PAPEROPS_RAGFLOW_BASE_URL` | `http://localhost:9380` | 可选 RAGFlow 后端地址 |
+| `PAPEROPS_RAGFLOW_API_KEY` | 空 | 仅选择 RAGFlow 后端时必需 |
 | `PAPEROPS_MAX_PARSE_ATTEMPTS` | `2` | 单文档最大解析次数 |
 | `PAPEROPS_MIN_MARKDOWN_CHARACTERS` | `120` | 正文最小字符数 |
 | `PAPEROPS_MIN_SECTION_COUNT` | `1` | 最小二级章节数 |
 | `PAPEROPS_MAX_REPLACEMENT_CHARACTER_RATIO` | `0.01` | 最大乱码替换字符比例 |
 | `PAPEROPS_MIN_RETRIEVAL_HITS` | `1` | 检索验收所需最小命中数 |
 
-MinerU 和 RAGFlow 地址将在真实适配器进入 PR3 时启用。密钥只保存在本地 `.env`，不得提交到仓库。
+密钥只保存在本地 `.env`，不得提交到仓库。上传文件默认限制为 50 MiB，MinerU 下载与解压结果也分别设置大小上限。
 
 ## 上游与个人实现边界
 
@@ -143,9 +208,12 @@ MinerU 和 RAGFlow 地址将在真实适配器进入 PR3 时启用。密钥只�
 ## 产品约束
 
 - 第一版只处理单文档，不承诺大规模批处理；
+- 当前后台运行器只面向单 FastAPI 进程；SQLite 不承担多实例分布式调度；
+- 重启后保留 checkpoint，但未完成线程需要调用恢复或审批接口，不会在启动时自动抢占执行；
 - 不把规则可确定的步骤包装成 Agent；
 - 不在宿主进程执行不受信任的 Python；
 - 不用自定义综合分数代替任务成功率、检索命中率和人工介入率；
+- 当前文档级探测只验证“索引链路可用”，不替代 PR4 的独立检索评测；
 - 不在代码和 README 中宣称尚未通过测试的生产能力。
 
 完整 MVP 范围和验收条件见 [docs/product-spec.md](docs/product-spec.md)。

@@ -41,4 +41,4 @@ v0.1-multimode-demo
 
 ## PaperOps 产品化
 
-PaperOps 不声称发明 ReAct、Plan-and-Solve、Reflection 或 Supervisor 等已有范式。产品化工作的贡献边界是：将通用范式展示项目重构为科研论文解析、质量审核、人工确认、知识库入库和检索验收的领域工作流，并通过可复现评测验证其效果。
+PaperOps 不声称发明 ReAct、Plan-and-Solve、Reflection 或 Supervisor 等已有范式。产品化工作的贡献边界是：将通用范式展示项目重构为科研论文解析、质量审核、人工确认、结构化切片和检索验收的领域工作流，并通过可复现评测验证其效果。

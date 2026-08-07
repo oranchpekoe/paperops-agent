@@ -318,7 +318,7 @@ async def test_duplicate_job_reuses_parser_and_ingestion_side_effects(
     second = await graph.ainvoke(_input(source), _config("duplicate-b"))
 
     assert first["job_id"] == second["job_id"]
-    assert first["ragflow_document_id"] == second["ragflow_document_id"]
+    assert first["indexed_document_id"] == second["indexed_document_id"]
     assert parser.created_artifacts == 1
     assert knowledge_base.created_documents == 1
     assert len(knowledge_base.ingest_calls) == 2
@@ -357,6 +357,6 @@ async def test_ingestion_error_produces_structured_failure(tmp_path: Path) -> No
     result = await graph.ainvoke(_input(source), _config("ingestion-error"))
 
     assert result["status"] is JobStatus.FAILED
-    assert result["failure"].code is FailureCode.INGEST_ERROR
+    assert result["failure"].code is FailureCode.INDEX_ERROR
     assert knowledge_base.created_documents == 0
     assert knowledge_base.search_calls == []

@@ -1,4 +1,4 @@
-"""Apply deterministic quality rules before knowledge-base ingestion."""
+"""Apply deterministic quality rules before document indexing."""
 
 from __future__ import annotations
 

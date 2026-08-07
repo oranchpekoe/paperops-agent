@@ -49,6 +49,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.pytest-tmp/
 cover/
 
 # Translations
@@ -168,8 +169,15 @@ cython_debug/
 
 # PaperOps runtime data
 artifacts/
+output/
 paperops.db
 paperops.db-shm
 paperops.db-wal
+paperops-index.db
+paperops-index.db-shm
+paperops-index.db-wal
 .tools/
 .uv-cache/
+
+# Local assistant configuration
+.claude/settings.local.json
