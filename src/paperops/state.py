@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+import operator
+from typing import Annotated, TypedDict
 
-from paperops.models import JobStatus, QualityDecision
+from paperops.models import (
+    ApprovalDecision,
+    JobStatus,
+    QualityDecision,
+    RetrievalReport,
+    WorkflowEvent,
+    WorkflowFailure,
+)
 
 
 class DocumentJobState(TypedDict, total=False):
@@ -17,13 +25,16 @@ class DocumentJobState(TypedDict, total=False):
 
     job_id: str
     source_pdf: str
+    target_knowledge_base: str
     file_hash: str
     status: JobStatus
     parse_attempts: int
     parsed_markdown_path: str
-    rule_quality_score: float
     quality_decision: QualityDecision
-    approval_required: bool
+    approval_decision: ApprovalDecision
     ragflow_document_id: str
     evaluation_report_path: str
-    errors: list[str]
+    retrieval_report: RetrievalReport
+    failure: WorkflowFailure
+    errors: Annotated[list[WorkflowFailure], operator.add]
+    events: Annotated[list[WorkflowEvent], operator.add]

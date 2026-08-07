@@ -1,1 +1,5 @@
-"""Domain workflow nodes for the PaperOps LangGraph (implemented in PR2)."""
+"""PaperOps workflow nodes."""
+
+from paperops.nodes.workflow import WorkflowNodes
+
+__all__ = ["WorkflowNodes"]
