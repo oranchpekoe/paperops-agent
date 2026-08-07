@@ -14,8 +14,8 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - `v0.1-multimode-demo`：已归档的四模式 Agent 学习原型；
 - PR1：完成产品边界、包结构、依赖和上游归属整理；
 - PR2：使用 Fake Parser/Retrieval Backend 跑通单文档状态机、重试、人工中断、checkpoint 恢复和幂等入库；
-- 当前 PR3：接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
-- PR4：增加稠密召回、融合与重排，并用公开论文评测集比较 Recall@K、MRR、延迟和人工介入率。
+- PR3：已接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
+- 当前 PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线。
 
 > `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
@@ -67,7 +67,11 @@ src/paperops/
 │   └── ragflow.py            # 文档上传、索引轮询与检索适配器
 ├── retrieval/
 │   ├── chunking.py           # 标题感知切片与确定性探测问题
-│   └── native.py             # SQLite FTS5/BM25 默认检索后端
+│   ├── native.py             # SQLite FTS5/BM25 默认检索后端
+│   ├── dense.py              # sqlite-vec 稠密检索后端
+│   ├── hybrid.py             # RRF 融合与有界重排
+│   └── providers.py          # 可替换的向量与重排模型协议
+├── evaluation/               # QASPER 转换、证据标签与检索指标
 ├── quality/rules.py          # 确定性 Markdown 质量门
 ├── nodes/workflow.py         # 领域节点与人工 interrupt
 └── api/                      # FastAPI、线程运行器与人工审批/恢复
@@ -170,6 +174,20 @@ PAPEROPS_INTEGRATION_COLLECTION_ID=uav-papers \
 uv run pytest tests/integration_tests -m integration -s
 ```
 
+## PR4 检索评测
+
+本地模型依赖是可选项；默认安装和真实服务仍使用 FTS5/BM25：
+
+```bash
+uv sync --extra retrieval-models
+uv run paperops-eval evaluate \
+  --dataset .paperops-eval/qasper-dev-50.json \
+  --output .paperops-eval/qasper-dev-50-hybrid.json \
+  --strategy hybrid
+```
+
+在固定的 QASPER dev 50 篇/148 问题诊断子集上，Dense 单路没有超过 BM25；Sparse + Dense RRF 将 Recall@10 从 0.382 提升至 0.429，交叉编码器重排进一步提升到 0.479，但带来明显 CPU 延迟。因此服务默认值保持 `native`，`dense`、`hybrid` 和 `hybrid_reranked` 必须显式选择。数据转换规则、完整指标、复现命令和限制见 [PR4 检索评测说明](docs/pr4-retrieval-evaluation.md)。
+
 ## 配置边界
 
 PaperOps 配置统一使用 `PAPEROPS_` 前缀：
@@ -183,11 +201,15 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 | `PAPEROPS_MINERU_BASE_URL` | `http://localhost:8000` | 自托管 `mineru-api` 地址 |
 | `PAPEROPS_MINERU_BACKEND` | `pipeline` | MinerU 解析后端 |
 | `PAPEROPS_EXTERNAL_TRUST_ENV` | `false` | 外部 HTTP客户端是否继承系统代理；本地服务默认关闭 |
-| `PAPEROPS_RETRIEVAL_BACKEND` | `native` | `native` 默认后端或可选 `ragflow` 适配器 |
+| `PAPEROPS_RETRIEVAL_BACKEND` | `native` | `native`、`dense`、`hybrid`、`hybrid_reranked` 或 `ragflow` |
 | `PAPEROPS_NATIVE_INDEX_DB` | `paperops-index.db` | 原生文档和 FTS5 Chunk 索引 |
 | `PAPEROPS_NATIVE_CHUNK_SIZE_CHARS` | `1200` | 单个结构化 Chunk 的最大字符数 |
 | `PAPEROPS_NATIVE_CHUNK_OVERLAP_CHARS` | `160` | 同一章节内相邻 Chunk 重叠字符数 |
 | `PAPEROPS_NATIVE_SEARCH_TOP_K` | `10` | BM25 候选数量上限 |
+| `PAPEROPS_RETRIEVAL_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | 可选 Dense/Hybrid 嵌入模型 |
+| `PAPEROPS_RETRIEVAL_RERANKER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | 可选重排模型 |
+| `PAPEROPS_RETRIEVAL_CANDIDATE_K` | `20` | 融合和重排的一阶段候选上限 |
+| `PAPEROPS_RETRIEVAL_RRF_K` | `60` | Reciprocal Rank Fusion 平滑常数 |
 | `PAPEROPS_RETRIEVAL_PROBE_TOP_K` | `10` | 文档级索引探测的候选数量 |
 | `PAPEROPS_RAGFLOW_BASE_URL` | `http://localhost:9380` | 可选 RAGFlow 后端地址 |
 | `PAPEROPS_RAGFLOW_API_KEY` | 空 | 仅选择 RAGFlow 后端时必需 |

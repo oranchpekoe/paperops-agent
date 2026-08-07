@@ -20,7 +20,13 @@ class Settings(BaseSettings):
     knowledge_dir: Path = Path("knowledge")
     checkpoint_db: Path = Path("paperops.db")
     client_mode: Literal["fake", "real"] = "fake"
-    retrieval_backend: Literal["native", "ragflow"] = "native"
+    retrieval_backend: Literal[
+        "native",
+        "dense",
+        "hybrid",
+        "hybrid_reranked",
+        "ragflow",
+    ] = "native"
 
     mineru_base_url: str = "http://localhost:8000"
     mineru_backend: str = "pipeline"
@@ -47,6 +53,11 @@ class Settings(BaseSettings):
     native_chunk_size_chars: int = Field(default=1200, ge=200, le=10000)
     native_chunk_overlap_chars: int = Field(default=160, ge=0, le=2000)
     native_search_top_k: int = Field(default=10, ge=1, le=100)
+    retrieval_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    retrieval_reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    retrieval_model_cache_dir: Path = Path(".paperops-models")
+    retrieval_candidate_k: int = Field(default=20, ge=1, le=100)
+    retrieval_rrf_k: int = Field(default=60, ge=1)
 
     external_connect_timeout_seconds: float = Field(default=10.0, gt=0.0)
     external_read_timeout_seconds: float = Field(default=60.0, gt=0.0)

@@ -1,0 +1,129 @@
+{
+  "name": "paperops-research-smoke",
+  "version": "1.0",
+  "kind": "smoke_fixture",
+  "split": "test",
+  "source_url": "local://paperops/original-smoke-fixture",
+  "license": "Original PaperOps test data",
+  "documents": [
+    {
+      "document_id": "uav-encirclement",
+      "title": "Cooperative UAV Encirclement with Centralized Training",
+      "abstract": "This study coordinates multiple aircraft around a moving target while preserving safe separation.",
+      "sections": [
+        {
+          "title": "Reward Design",
+          "paragraphs": [
+            "The team reward combines progress toward the target with a collision penalty and a boundary penalty. A formation bonus is issued only when every aircraft occupies its assigned sector."
+          ]
+        },
+        {
+          "title": "Training Architecture",
+          "paragraphs": [
+            "During learning, a centralized critic consumes joint observations from all vehicles. At deployment, each decentralized actor selects an action from its own local observation."
+          ]
+        }
+      ]
+    },
+    {
+      "document_id": "image-dehazing",
+      "title": "Single Image Dehazing with a Physical Prior",
+      "abstract": "The method restores outdoor photographs degraded by suspended particles.",
+      "sections": [
+        {
+          "title": "Atmospheric Model",
+          "paragraphs": [
+            "The reconstruction estimates a transmission map and global atmospheric light before recovering scene radiance from the hazy observation."
+          ]
+        },
+        {
+          "title": "Optimization",
+          "paragraphs": [
+            "An edge-aware regularizer smooths the transmission estimate while retaining discontinuities near object boundaries."
+          ]
+        }
+      ]
+    },
+    {
+      "document_id": "drone-energy",
+      "title": "Energy-Aware Scheduling for Inspection Drones",
+      "abstract": "A scheduler assigns inspection routes under uncertain wind and battery consumption.",
+      "sections": [
+        {
+          "title": "Energy Policy",
+          "paragraphs": [
+            "A route is accepted only when predicted battery reserve remains above twenty percent after returning to the charging station."
+          ]
+        },
+        {
+          "title": "Safety Constraints",
+          "paragraphs": [
+            "Flights are postponed when forecast wind exceeds the vehicle limit or when a mandatory landing corridor is unavailable."
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "q-reward-safety",
+      "text": "Which penalties keep the UAV team away from collisions and the operating boundary?",
+      "evidence": [
+        {
+          "evidence_id": "ev-reward",
+          "document_id": "uav-encirclement",
+          "text": "The team reward combines progress toward the target with a collision penalty and a boundary penalty. A formation bonus is issued only when every aircraft occupies its assigned sector.",
+          "relevance": 2
+        }
+      ]
+    },
+    {
+      "query_id": "q-decentralized-execution",
+      "text": "How can each aircraft act alone after learning from global information?",
+      "evidence": [
+        {
+          "evidence_id": "ev-training",
+          "document_id": "uav-encirclement",
+          "text": "During learning, a centralized critic consumes joint observations from all vehicles. At deployment, each decentralized actor selects an action from its own local observation.",
+          "relevance": 2
+        }
+      ]
+    },
+    {
+      "query_id": "q-dehazing-variables",
+      "text": "Which physical quantities are estimated before scene radiance is recovered?",
+      "evidence": [
+        {
+          "evidence_id": "ev-atmospheric-model",
+          "document_id": "image-dehazing",
+          "text": "The reconstruction estimates a transmission map and global atmospheric light before recovering scene radiance from the hazy observation.",
+          "relevance": 3
+        }
+      ]
+    },
+    {
+      "query_id": "q-battery-reserve",
+      "text": "What minimum battery reserve is required after the drone returns to charge?",
+      "evidence": [
+        {
+          "evidence_id": "ev-energy-policy",
+          "document_id": "drone-energy",
+          "text": "A route is accepted only when predicted battery reserve remains above twenty percent after returning to the charging station.",
+          "relevance": 3
+        }
+      ]
+    },
+    {
+      "query_id": "q-flight-postponement",
+      "text": "Under what weather or landing conditions is an inspection flight delayed?",
+      "evidence": [
+        {
+          "evidence_id": "ev-flight-safety",
+          "document_id": "drone-energy",
+          "text": "Flights are postponed when forecast wind exceeds the vehicle limit or when a mandatory landing corridor is unavailable.",
+          "relevance": 2
+        }
+      ]
+    }
+  ]
+}

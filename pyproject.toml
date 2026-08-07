@@ -18,11 +18,18 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
     "python-multipart>=0.0.20",
+    "sqlite-vec>=0.1.7",
     "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+retrieval-models = [
+    "fastembed>=0.8.0,<0.9.0",
 ]
 
 [project.scripts]
 paperops-api = "paperops.api.app:run"
+paperops-eval = "paperops.evaluation.cli:main"
 
 [project.urls]
 Repository = "https://github.com/oranchpekoe/paperops-agent"
@@ -63,6 +70,7 @@ lint.ignore = [
 ]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "UP", "T201"]
+"src/paperops/evaluation/cli.py" = ["T201"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

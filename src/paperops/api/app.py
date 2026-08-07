@@ -41,7 +41,14 @@ from paperops.models import (
     WorkflowEvent,
     WorkflowFailure,
 )
-from paperops.retrieval.native import NativeRetrievalBackend
+from paperops.retrieval import (
+    DenseRetrievalBackend,
+    FastEmbedProvider,
+    FastEmbedReranker,
+    HybridRetrievalBackend,
+    NativeRetrievalBackend,
+    RerankedRetrievalBackend,
+)
 from paperops.settings import Settings
 
 _CHECKPOINT_TYPES = (
@@ -112,16 +119,53 @@ def _safe_source_name(filename: str | None) -> str:
     return f"{normalized or 'paper'}.pdf"
 
 
+def _build_retrieval_backend(settings: Settings) -> RetrievalBackend:
+    """Create the explicitly selected retrieval strategy."""
+    if settings.retrieval_backend == "ragflow":
+        return RAGFlowClient(settings)
+    if settings.retrieval_backend == "native":
+        return NativeRetrievalBackend(settings)
+
+    model_settings = settings.model_copy(
+        update={
+            "native_search_top_k": max(
+                settings.native_search_top_k,
+                settings.retrieval_candidate_k,
+            )
+        }
+    )
+    embedding = FastEmbedProvider(
+        settings.retrieval_embedding_model,
+        cache_dir=settings.retrieval_model_cache_dir,
+    )
+    dense = DenseRetrievalBackend(model_settings, embedding)
+    if settings.retrieval_backend == "dense":
+        return dense
+
+    hybrid = HybridRetrievalBackend(
+        NativeRetrievalBackend(model_settings),
+        dense,
+        candidate_k=settings.retrieval_candidate_k,
+        rrf_k=settings.retrieval_rrf_k,
+    )
+    if settings.retrieval_backend == "hybrid":
+        return hybrid
+    return RerankedRetrievalBackend(
+        hybrid,
+        FastEmbedReranker(
+            settings.retrieval_reranker_model,
+            cache_dir=settings.retrieval_model_cache_dir,
+        ),
+        candidate_k=settings.retrieval_candidate_k,
+    )
+
+
 def _build_clients(
     settings: Settings,
 ) -> tuple[ParserClient, RetrievalBackend]:
     """Create concrete adapters for the selected local or real profile."""
     if settings.client_mode == "real":
-        retrieval_backend: RetrievalBackend
-        if settings.retrieval_backend == "ragflow":
-            retrieval_backend = RAGFlowClient(settings)
-        else:
-            retrieval_backend = NativeRetrievalBackend(settings)
+        retrieval_backend = _build_retrieval_backend(settings)
         return MinerUClient(settings), retrieval_backend
     return (
         FakeParserClient(settings.artifacts_dir),
