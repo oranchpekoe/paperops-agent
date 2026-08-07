@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections import deque
 from pathlib import Path
+from threading import Lock
 
 from paperops.models import (
     IngestRequest,
@@ -44,10 +46,20 @@ class FakeParserClient:
         self._outcomes: deque[str | Exception] = deque(outcomes or [])
         self.calls: list[ParseRequest] = []
         self.created_artifacts = 0
+        self._lock = Lock()
 
     async def parse(self, request: ParseRequest) -> ParseResult:
         """Create one Markdown artifact per job attempt, or reuse it on replay."""
         self.calls.append(request)
+        return await asyncio.to_thread(self._parse_sync, request)
+
+    def _parse_sync(self, request: ParseRequest) -> ParseResult:
+        """Perform Fake Parser filesystem operations outside the event loop."""
+        with self._lock:
+            return self._parse_locked(request)
+
+    def _parse_locked(self, request: ParseRequest) -> ParseResult:
+        """Create or reuse an artifact while holding the fake-client lock."""
         markdown_path = (
             self.artifacts_dir / request.job_id / f"parse-attempt-{request.attempt}.md"
         )
@@ -96,10 +108,20 @@ class FakeKnowledgeBaseClient:
         self._results_by_key: dict[str, IngestResult] = {}
         self._documents: dict[str, tuple[str, str]] = {}
         self.created_documents = 0
+        self._lock = Lock()
 
     async def ingest(self, request: IngestRequest) -> IngestResult:
         """Create one deterministic document for each idempotency key."""
         self.ingest_calls.append(request)
+        return await asyncio.to_thread(self._ingest_sync, request)
+
+    def _ingest_sync(self, request: IngestRequest) -> IngestResult:
+        """Perform ingestion file I/O outside the event loop."""
+        with self._lock:
+            return self._ingest_locked(request)
+
+    def _ingest_locked(self, request: IngestRequest) -> IngestResult:
+        """Create or reuse a document while holding the fake-client lock."""
         existing = self._results_by_key.get(request.idempotency_key)
         if existing is not None:
             return existing.model_copy(update={"created": False})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,21 @@ def _hash_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validate_and_hash_pdf(path: Path) -> str:
+    """Validate and hash a source PDF outside the event loop."""
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return _hash_file(path)
+
+
+def _write_text_atomically(path: Path, content: str) -> None:
+    """Write a UTF-8 artifact atomically outside the event loop."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(content, encoding="utf-8")
+    temporary_path.replace(path)
 
 
 def _job_id(file_hash: str, knowledge_base: str) -> str:
@@ -79,7 +95,7 @@ class WorkflowNodes:
         """Validate input and derive deterministic file and job identities."""
         source_pdf = Path(state.get("source_pdf", ""))
         knowledge_base = state.get("target_knowledge_base", "").strip()
-        if not source_pdf.is_file() or source_pdf.suffix.lower() != ".pdf":
+        if source_pdf.suffix.lower() != ".pdf":
             failure = WorkflowFailure(
                 stage=JobStatus.PENDING,
                 code=FailureCode.INVALID_SOURCE,
@@ -94,7 +110,15 @@ class WorkflowNodes:
             )
             return _failure_update(failure, "Destination validation failed.")
 
-        file_hash = _hash_file(source_pdf)
+        try:
+            file_hash = await asyncio.to_thread(_validate_and_hash_pdf, source_pdf)
+        except OSError:
+            failure = WorkflowFailure(
+                stage=JobStatus.PENDING,
+                code=FailureCode.INVALID_SOURCE,
+                message=f"Source PDF does not exist or cannot be read: {source_pdf}",
+            )
+            return _failure_update(failure, "Source validation failed.")
         job_id = _job_id(file_hash, knowledge_base)
         return {
             "job_id": job_id,
@@ -163,7 +187,11 @@ class WorkflowNodes:
         """Apply deterministic rules to the referenced Markdown artifact."""
         markdown_path = Path(state.get("parsed_markdown_path", ""))
         try:
-            decision = evaluate_markdown(markdown_path, self.quality_policy)
+            decision = await asyncio.to_thread(
+                evaluate_markdown,
+                markdown_path,
+                self.quality_policy,
+            )
             errors: list[WorkflowFailure] = []
         except Exception as exc:
             failure = WorkflowFailure(
@@ -338,10 +366,11 @@ class WorkflowNodes:
         report_path = (
             self.settings.artifacts_dir / state["job_id"] / "retrieval-evaluation.json"
         )
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = report_path.with_suffix(".json.tmp")
-        temporary_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-        temporary_path.replace(report_path)
+        await asyncio.to_thread(
+            _write_text_atomically,
+            report_path,
+            report.model_dump_json(indent=2),
+        )
 
         if not passed:
             failure = WorkflowFailure(

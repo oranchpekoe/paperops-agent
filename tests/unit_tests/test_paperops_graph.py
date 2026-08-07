@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import get_ident
 from typing import Any
 
 import pytest
@@ -73,6 +74,52 @@ async def test_happy_path_completes_and_writes_report(tmp_path: Path) -> None:
     assert parser.created_artifacts == 1
     assert knowledge_base.created_documents == 1
     assert VALID_MARKDOWN not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_filesystem_calls_run_outside_the_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source_pdf(tmp_path)
+    settings = _settings(tmp_path)
+    parser = FakeParserClient(settings.artifacts_dir, [VALID_MARKDOWN])
+    graph = build_graph(
+        parser=parser,
+        knowledge_base=FakeKnowledgeBaseClient(),
+        settings=settings,
+        checkpointer=InMemorySaver(),
+    )
+    event_loop_thread = get_ident()
+
+    with monkeypatch.context() as context:
+        for method_name in (
+            "is_file",
+            "mkdir",
+            "open",
+            "read_text",
+            "replace",
+            "write_text",
+        ):
+            original = getattr(Path, method_name)
+
+            def guarded(
+                path: Path,
+                *args: Any,
+                _method: Any = original,
+                _name: str = method_name,
+                **kwargs: Any,
+            ) -> Any:
+                assert get_ident() != event_loop_thread, (
+                    f"Path.{_name} ran on the event-loop thread"
+                )
+                return _method(path, *args, **kwargs)
+
+            context.setattr(Path, method_name, guarded)
+
+        result = await graph.ainvoke(_input(source), _config("non-blocking-io"))
+
+    assert result["status"] is JobStatus.COMPLETED
 
 
 @pytest.mark.asyncio
