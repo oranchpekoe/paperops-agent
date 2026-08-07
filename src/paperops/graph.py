@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from paperops.clients.fakes import FakeKnowledgeBaseClient, FakeParserClient
-from paperops.clients.protocols import KnowledgeBaseClient, ParserClient
+from paperops.clients.protocols import ParserClient, RetrievalBackend
 from paperops.models import JobStatus, QualityVerdict
 from paperops.nodes.workflow import WorkflowNodes
 from paperops.quality.rules import QualityPolicy
@@ -41,7 +41,7 @@ def _route_after_ingest(
 def build_graph(
     *,
     parser: ParserClient,
-    knowledge_base: KnowledgeBaseClient,
+    knowledge_base: RetrievalBackend,
     settings: Settings,
     checkpointer: BaseCheckpointSaver[str] | None = None,
     interrupt_after: list[str] | None = None,

@@ -1,11 +1,30 @@
-"""External service boundaries and deterministic PR2 fakes."""
+"""External service boundaries, concrete adapters, and deterministic fakes."""
 
+from paperops.clients.errors import (
+    ExternalServiceError,
+    ExternalServiceTimeout,
+    MinerUError,
+    MinerUTimeout,
+    RAGFlowError,
+    RAGFlowTimeout,
+)
 from paperops.clients.fakes import FakeKnowledgeBaseClient, FakeParserClient
-from paperops.clients.protocols import KnowledgeBaseClient, ParserClient
+from paperops.clients.protocols import (
+    KnowledgeBaseClient,
+    ParserClient,
+    RetrievalBackend,
+)
 
 __all__ = [
+    "ExternalServiceError",
+    "ExternalServiceTimeout",
     "FakeKnowledgeBaseClient",
     "FakeParserClient",
     "KnowledgeBaseClient",
+    "MinerUError",
+    "MinerUTimeout",
     "ParserClient",
+    "RetrievalBackend",
+    "RAGFlowError",
+    "RAGFlowTimeout",
 ]

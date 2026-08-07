@@ -1,7 +1,7 @@
 [project]
 name = "paperops-agent"
 version = "0.1.0"
-description = "A durable workflow for parsing, validating, and indexing research papers with MinerU and RAGFlow."
+description = "A durable workflow for parsing, validating, chunking, and retrieving research papers."
 maintainers = [
     { name = "oranchpekoe" },
 ]
@@ -10,10 +10,19 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11,<4.0"
 dependencies = [
+    "aiosqlite>=0.20.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
     "langgraph>=1.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.34.0",
 ]
+
+[project.scripts]
+paperops-api = "paperops.api.app:run"
 
 [project.urls]
 Repository = "https://github.com/oranchpekoe/paperops-agent"
@@ -72,6 +81,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+addopts = "--basetemp=.pytest-tmp"
 markers = [
     "integration: tests that require external services (API keys, Chroma, LLM).",
 ]

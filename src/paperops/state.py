@@ -32,7 +32,8 @@ class DocumentJobState(TypedDict, total=False):
     parsed_markdown_path: str
     quality_decision: QualityDecision
     approval_decision: ApprovalDecision
-    ragflow_document_id: str
+    indexed_document_id: str
+    indexed_chunk_count: int
     evaluation_report_path: str
     retrieval_report: RetrievalReport
     failure: WorkflowFailure

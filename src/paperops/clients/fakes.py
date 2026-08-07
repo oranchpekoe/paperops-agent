@@ -92,6 +92,8 @@ class FakeParserClient:
 class FakeKnowledgeBaseClient:
     """Provide idempotent in-memory ingestion and deterministic retrieval."""
 
+    name = "fake"
+
     def __init__(
         self,
         *,
@@ -138,6 +140,7 @@ class FakeKnowledgeBaseClient:
             document_id=document_id,
             idempotency_key=request.idempotency_key,
             created=True,
+            chunk_count=1,
         )
         self._results_by_key[request.idempotency_key] = result
         self._documents[document_id] = (request.knowledge_base, content)
@@ -153,7 +156,17 @@ class FakeKnowledgeBaseClient:
         if not self.return_hits:
             return []
 
-        stored = self._documents.get(request.expected_document_id)
+        expected_document_id = request.expected_document_id
+        if expected_document_id is None:
+            matching_ids = [
+                document_id
+                for document_id, (knowledge_base, _) in self._documents.items()
+                if knowledge_base == request.knowledge_base
+            ]
+            expected_document_id = matching_ids[0] if matching_ids else None
+        if expected_document_id is None:
+            return []
+        stored = self._documents.get(expected_document_id)
         if stored is None:
             return []
         knowledge_base, content = stored
@@ -161,7 +174,8 @@ class FakeKnowledgeBaseClient:
             return []
         return [
             SearchHit(
-                document_id=request.expected_document_id,
+                document_id=expected_document_id,
+                chunk_id=f"{expected_document_id}:0",
                 content=content[:240],
                 score=1.0,
             )
