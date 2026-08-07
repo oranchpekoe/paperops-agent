@@ -1,5 +1,7 @@
 # 开发日志与Bug修复记录
 
+> 归档说明：本文记录 `v0.1-multimode-demo` 原型的开发过程。当前 PaperOps 产品范围以 [product-spec.md](product-spec.md) 为准。
+
 ## 开发日志
 
 | 日期 | 进展 |

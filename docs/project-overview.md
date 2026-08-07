@@ -1,5 +1,7 @@
 # Multi-Mode Agent Framework — 项目全景
 
+> 归档说明：本文描述 `v0.1-multimode-demo`。当前 PaperOps 产品范围见 [product-spec.md](product-spec.md)。
+
 > 最后一次更新：2026-06-08。覆盖 4 模式、MCP、RAG、三层记忆、流式输出、Eval 框架。
 
 ---
@@ -402,4 +404,4 @@ LangGraph 内置的 `add_messages` reducer。
 
 ---
 
-> **相关文档**：[简历与面试准备](resume.md) · [开发日志与Bug修复](development-log.md) · [缺口与改进](gaps-and-improvements.md) · [优化Sprint总结](optimization-summary.md)
+> **相关文档**：[开发日志与Bug修复](development-log.md) · [缺口与改进](gaps-and-improvements.md) · [优化Sprint总结](optimization-summary.md) · [上游来源与实现边界](upstream.md)

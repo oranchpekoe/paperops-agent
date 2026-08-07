@@ -1,12 +1,13 @@
 [project]
-name = "react-agent"
-version = "0.0.1"
-description = "Starter template for making a custom Reasoning and Action agent (using tool calling) in LangGraph."
+name = "paperops-agent"
+version = "0.1.0"
+description = "A durable workflow for parsing, validating, and indexing research papers with MinerU and RAGFlow."
 authors = [
-    { name = "William Fu-Hinthorn", email = "13333726+hinthornw@users.noreply.github.com" },
+    { name = "oranchpekoe" },
 ]
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<4.0"
 dependencies = [
     "langgraph>=1.0.0",
@@ -16,22 +17,43 @@ dependencies = [
     "langchain-fireworks>=0.1.7",
     "python-dotenv>=1.2.2",
     "langchain-tavily>=0.1",
+    # The legacy v0.1 graph imports these integrations lazily. Keeping them
+    # explicit makes a clean install match the capabilities documented in the
+    # archived prototype instead of silently disabling RAG and memory.
+    "langchain-chroma>=0.2.0",
+    "langchain-community>=0.3.0",
+    "langchain-text-splitters>=0.3.0",
+    "pypdf>=5.0.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
 ]
 
-
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+mcp = [
+    "langchain-mcp-adapters>=0.2.2",
+    "mcp>=1.27.2",
+]
+api = [
+    "aiosqlite>=0.20.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "python-multipart>=0.0.18",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.urls]
+Repository = "https://github.com/oranchpekoe/multi-mode-agent"
+Upstream = "https://github.com/langchain-ai/react-agent"
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["langgraph.templates.react_agent", "react_agent"]
-[tool.setuptools.package-dir]
-"langgraph.templates.react_agent" = "src/react_agent"
-"react_agent" = "src/react_agent"
-
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["paperops*", "react_agent*"]
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
@@ -75,7 +97,11 @@ constraint-dependencies = ["pyjwt>=2.12.0"]
 dev = [
     "anyio>=4.7.0",
     "langgraph-cli[inmem]>=0.4.10",
+    "mypy>=1.11.1",
     "pytest>=9.0.3",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.1",
+    "vcrpy>=7.0.0",
 ]
 
 [tool.pytest.ini_options]
