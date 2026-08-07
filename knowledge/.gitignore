@@ -1,0 +1,3 @@
+# Research PDFs and parsed artifacts are local inputs, not source code.
+*
+!.gitignore

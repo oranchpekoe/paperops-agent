@@ -1,4 +1,4 @@
-# This workflow will run integration tests for the current project once per day
+# External-service integration tests are triggered manually.
 
 name: Integration Tests
 
@@ -32,8 +32,7 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           uv venv
-          uv sync
-          uv pip install -U pytest-asyncio vcrpy
+          uv sync --all-extras --frozen
       - name: Run integration tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

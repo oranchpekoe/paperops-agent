@@ -1,5 +1,7 @@
 # 优化冲刺总结 — 2026-06-08
 
+> 归档说明：本文记录 `v0.1-multimode-demo` 的故障排查与优化，保留为工程复盘材料。
+
 ## 概述
 
 Multi-Mode Agent Framework 核心功能建成后（4 种模式、MCP、RAG、记忆、评估），一次真实场景测试暴露了严重的生产问题：单条 "how to plan a Beijing trip" 查询消耗了 **2.34M tokens**，发起了 **755 次 HTTP 请求**，运行了 **20 分钟**。通过 LangSmith 链路追踪发现根因链，随后进行了为期 1 天的集中冲刺，修复了 **6 个 Bug**，实现了 **94% 的 token 削减**和 **75% 的延迟降低**。
@@ -168,7 +170,7 @@ Chroma 中有 59 条污染数据                 0 条污染数据，记忆库�
 | `src/react_agent/modes/plan_solve.py` | 上下文截断、步骤上限 3→5、prompt 中的工具使用指引 | 仅 Plan-Solve 模式 |
 | `tests/benchmarks.py` | `tool-calculation` expected_mode：react → plan_solve | 仅评估 |
 | `tests/cleanup_memory.py` | **新增** — 一次性记忆清理 + `--all` 全量清空 | 开发工具 |
-| `profile.md` | Bug 修复记录、指标数据、开发日志 | 文档 |
+| `development-log.md` | Bug 修复记录、指标数据、开发日志 | 文档 |
 
 ---
 

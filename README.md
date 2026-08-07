@@ -1,262 +1,137 @@
-# Multi-Mode Agent Framework
+# PaperOps Agent
 
+[![CI](https://github.com/oranchpekoe/paperops-agent/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/oranchpekoe/paperops-agent/actions/workflows/unit-tests.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.0+-green.svg)](https://github.com/langchain-ai/langgraph)
 
-基于 LangGraph 的多模式 AI Agent，集成**模式路由**、**MCP 协议**、**RAG 文档检索**、**Supervisor 多 Agent 协同**及**三层记忆系统**。AI Agent 工程实习面试展示项目。
+面向实验室科研文献的解析、质量验收与知识库入库工作流。
 
----
+PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个可以验证的具体问题：**PDF 被 MinerU 成功解析并上传 RAGFlow，并不代表知识库真正可用**。双栏排版、公式、表格、图片和扫描页可能产生隐蔽的内容缺失，需要一条可重试、可人工审核、可恢复并能进行检索验收的处理链路。
 
-## 架构概览
+## 当前状态
 
-```
-用户输入
-    │
-    ▼
-┌──────────────────┐
-│  0. 记忆召回       │  ← 从 Chroma 向量库召回历史相关事实，注入上下文
-│  (inject_memory) │
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  1. 模式路由       │  ← LLM 分析用户意图，四选一
-│  (mode_router)   │
-└────────┬─────────┘
-         │
-    ┌────┼────┬──────────┐
-    │    │    │          │
-    ▼    ▼    ▼          ▼
-┌────┐ ┌───┐ ┌─────┐ ┌──────────┐
-│ReAct││反思││规划求解││ Supervisor│
-│简单 ││写作││多步骤 ││  多Agent  │
-│问答 ││分析││任务   ││   协同    │
-└──┬─┘ └─┬─┘ └──┬──┘ └────┬─────┘
-    │    │    │          │
-    └────┼────┴──────────┘
-         │
-         ▼
-┌──────────────────┐
-│  5. 记忆提取       │  ← LLM 自动提取关键事实 → 存 Chroma
-│  (extract_memory)│     消息 > 50 条时自动压缩旧上下文
-└────────┬─────────┘
-         │
-         ▼
-      返回答案
-```
+项目正在从多模式 LangGraph 原型重构为领域工作流：
 
-**实际流程**：`注入记忆 → 路由分类 → 子图执行 → 提取记忆 → 返回`，共 5 步。记忆系统在每次对话前后自动运行。
+- `v0.1-multimode-demo`：已归档的四模式 Agent 学习原型；
+- 当前分支：完成产品边界、包结构、依赖和上游归属整理；
+- PR2：使用 Fake MinerU/RAGFlow Client 跑通单文档状态机；
+- PR3：接入真实服务、持久化和人工审批 API；
+- PR4：构建公开论文评测集并与“直接解析上传”基线对比。
 
-### 四种模式对比
+> 当前 `langgraph.json` 暂时仍暴露归档前的多模式图，便于迁移期间回归验证。PaperOps 可执行图将在 PR2 加入。本 README 不宣称尚未实现的功能。
 
-| 模式 | 适用场景 | 工作方式 | 工具 |
-|------|----------|----------|------|
-| **ReAct** | 简单问答、事实查询、搜索 | Reason → Act → Observe → 循环 | ✅ 全部 |
-| **反思** | 写作、分析、代码审查 | 生成 → 自我批判 → 改进（最多 3 轮） | ❌ 纯推理 |
-| **规划求解** | 多步骤任务、数学题、旅行规划 | 分解步骤 → 逐步执行 → 汇总 | ✅ 全部 |
-| **Supervisor** | 跨领域任务（搜索+计算） | 主管决策 → 委派专家 → 审查 → 循环 | ✅ 按专家分配 |
+## 目标用户与输入输出
 
----
+**用户**：需要批量整理科研论文的实验室学生或研究人员。
 
-## 核心特性
+**输入**：单篇科研 PDF；后续扩展为批次目录。
 
-### 1. LLM 模式路由
+**输出**：
 
-在图的入口处，用 LLM 分析每条用户消息的语义，自动选择最合适的 Agent 架构。不是正则匹配——同一个 LLM 判断"这个问题的本质是什么"，然后路由到对应的子图。
+- MinerU 解析产物及质量报告；
+- RAGFlow 文档 ID 和索引状态；
+- 基于文档生成的检索测试集；
+- 检索命中与答案依据验收报告；
+- 失败原因、重试记录和人工审核记录。
 
-### 2. 三层记忆系统
+## MVP 工作流
 
-| 层级 | 存储位置 | 生命周期 | 做什么 |
-|------|----------|----------|--------|
-| **短期** | `MemorySaver` checkpointer | 同一 `thread_id` 内 | 当前会话的消息历史 |
-| **长期** | Chroma 向量库（`.chroma_db/`） | 跨会话持久化 | 用户偏好、决策、背景等事实 |
-| **摘要** | 压缩后替换旧消息 | 同 thread 内 | 消息超过 50 条时 LLM 压缩旧上下文 |
-
-- **写入**：每次对话后，LLM 自动提取值得记住的事实 → embedding → 存入 Chroma → 去重检查
-- **读取**：每次对话前，用用户当前问题去 Chroma 做语义搜索 → 注入 prompt
-- **压缩**：消息过长时保留最近 10 条，其余压缩为一段摘要段落
-
-### 3. MCP 协议集成
-
-通过 `MCP_CONFIG` 环境变量动态加载外部工具服务器：
-
-```json
-{
-  "filesystem": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-    "transport": "stdio"
-  }
-}
+```mermaid
+flowchart TD
+    A["登记 PDF 与文件哈希"] --> B["调用 MinerU 解析"]
+    B --> C["规则质量检查"]
+    C --> D{"结果是否明确？"}
+    D -->|"合格"| E["上传 RAGFlow"]
+    D -->|"明显失败"| F["调整策略后重试"]
+    D -->|"无法判断"| G["LLM 语义质检"]
+    G --> H{"置信度足够？"}
+    H -->|"是"| E
+    H -->|"否"| I["等待人工审核"]
+    I --> E
+    F --> B
+    E --> J["生成检索测试问题"]
+    J --> K["检索与依据验收"]
+    K --> L["输出质量报告"]
 ```
 
-- 懒加载：首次使用时连接，后续调用复用
-- 单服务器故障不影响其他服务器（降级）
-- 零配置：不设 `MCP_CONFIG` 时行为不变
+稳定步骤由普通代码执行，LLM 只处理规则无法可靠判断的语义质量问题。解析正文保存在 artifact 目录，LangGraph State 只保存路径、状态和结构化决策，避免大型文档反复进入 checkpoint。
 
-### 4. RAG 文档检索
+## 仓库结构
 
-将 `.txt` / `.md` / `.pdf` 文件放入 `docs/` 目录，Agent 即可检索：
+```text
+src/
+├── paperops/                 # 新的领域应用边界
+│   ├── models.py             # 任务状态与质量决策模型
+│   ├── state.py              # 单文档 LangGraph State
+│   ├── settings.py           # PAPEROPS_* 环境配置
+│   ├── api/                  # PR3: FastAPI 与人工审批
+│   ├── clients/              # PR2/PR3: MinerU、RAGFlow 适配器
+│   └── nodes/                # PR2: 领域工作流节点
+└── react_agent/              # v0.1 原型，迁移期间保留
 
-- **Chroma** 向量存储（本地持久化到 `.chroma_db/`）
-- **OpenAI text-embedding-3-small** 做向量化
-- **RecursiveCharacterTextSplitter** 分块（1000 字/块，200 字重叠）
-- 懒加载单例模式：文档索引一次，所有查询共享
-
-### 5. Supervisor 多 Agent 协同
-
-```
-Supervisor（主管 LLM）
-    ├── Researcher（研究员）— 搜索收集信息
-    ├── Analyst（分析师）— 纯推理，无工具
-    └── Executor（执行者）— python_repl 计算
+knowledge/                    # 本地论文输入，不提交 Git
+tests/                        # 单元、集成和后续评测
+docs/                         # 产品约束、上游归属和技术复盘
 ```
 
-执行循环：**决策 → 委派专家 → 审查结果 → 再委派或结束**（最多 5 轮迭代）。
+仓库名和 Python 分发包使用连字符 `paperops-agent`，Python 导入包使用合法标识符 `paperops`。`src/` 布局用于确保测试验证的是正确安装后的包，而不是碰巧从仓库根目录导入源码。
 
-举例——"查日本 2024 年 GDP 再算它的 5%"：
-```
-Router → supervisor
-  决策 → RESEARCH  → Researcher 搜索 GDP 数据
-  审查 → EXECUTE   → Executor 计算 5%
-  审查 → ANSWER    → Supervisor 汇总最终答案
-```
+新代码的类型边界、结构化输出和 Prompt 角色约定见 [工程约定](docs/engineering-conventions.md)。
 
-### 6. 流式输出 + 基准测试
+## 开发环境
 
-- **流式输出**：`stream.py` 提供 token 级别和事件级别的流式接口
-- **双模型 Eval**：14 个场景 × 2 个 LLM，对比答案质量
-- **基准测试**：100% 通过率（14/14），平均分 87.6%
+前置条件：
 
----
+- Python 3.11 或 3.12；
+- [uv](https://docs.astral.sh/uv/)；
+- 仅运行 PR1 单元测试时不需要任何 API Key。
 
-## 项目结构
-
-```
-react-agent/
-├── src/react_agent/
-│   ├── graph.py              # 主编排器（路由 + 记忆 + 4 子图注册）
-│   ├── state.py              # 统一 State Schema（MainState）
-│   ├── tools.py              # 工具注册中心（search / python_repl / retrieve / MCP）
-│   ├── memory.py             # 三层记忆：MemoryStore + extract_facts + compress_context
-│   ├── mcp.py                # MCP 客户端封装
-│   ├── stream.py             # 流式输出
-│   ├── context.py            # 运行时配置
-│   ├── prompts.py            # 各模式 System Prompt
-│   ├── utils.py              # 模型加载辅助
-│   └── modes/
-│       ├── react.py          # ReAct 子图
-│       ├── reflection.py     # 反思子图（生成→批判→改进）
-│       ├── plan_solve.py     # 规划求解子图（规划→执行→汇总）
-│       └── supervisor.py     # Supervisor 子图（多 Agent 协同）
-├── docs/                     # RAG 文档 + 项目文档
-├── tests/
-│   ├── test_trace.py         # 端到端链路测试（4 种查询 × 2 模型）
-│   ├── benchmarks.py         # 双模型 Eval 框架
-│   ├── run_evals.py          # Eval 运行器
-│   ├── unit_tests/           # 单元测试
-│   └── integration_tests/    # 集成测试
-├── scripts/                  # 面试文档构建脚本
-├── mcp_demo_server.py        # MCP 演示服务器
-├── pyproject.toml
-├── .env.example
-└── langgraph.json
-```
-
----
-
-## 快速开始
-
-### 前置条件
-
-- Python 3.11+
-- [Tavily API Key](https://tavily.com)（网页搜索用）
-- LLM API Key（支持 OpenAI 兼容接口）
-
-### 安装配置
+安装全部开发与可选依赖：
 
 ```bash
-# 1. 进入项目
-cd react-agent
-
-# 2. 安装依赖（推荐 uv）
-pip install uv
-uv sync
-
-# 3. 配置环境变量
-cp .env.example .env
-# 编辑 .env，填入你的 API Key
-
-# 4. （可选）安装 MCP 支持
-pip install langchain-mcp-adapters
-
-# 5. （可选）放入 RAG 文档
-mkdir docs
-echo "# 我的知识库" > docs/notes.md
+uv sync --all-extras
 ```
 
-### 环境变量
-
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `OPENAI_API_KEY` | ✅ | LLM API Key（aihubmix 或其他 OpenAI 兼容接口） |
-| `OPENAI_BASE_URL` | ✅ | API 基础 URL，默认 `https://aihubmix.com/v1` |
-| `MODEL` | ✅ | 模型名，如 `openai/deepseek-v4-flash` |
-| `TAVILY_API_KEY` | ✅ | Tavily 搜索 API Key |
-| `MCP_CONFIG` | ❌ | MCP 服务器配置（JSON 字符串或文件路径） |
-| `EMBEDDING_MODEL` | ❌ | 向量化模型，默认 `text-embedding-3-small` |
-| `CHROMA_PERSIST_DIR` | ❌ | Chroma 持久化目录，默认 `.chroma_db/` |
-
-### 运行
-
-**LangGraph Studio（开发推荐）：**
-```bash
-set PYTHONUTF8=1
-langgraph dev --port 1024 --allow-blocking
-```
-
-**直接调用：**
-```python
-from react_agent.graph import graph
-
-result = await graph.ainvoke({
-    "messages": [{"role": "user", "content": "法国的首都是哪？"}]
-})
-print(result["messages"][-1].content)
-```
-
----
-
-## 测试
+运行检查：
 
 ```bash
-# 端到端链路测试
-python tests/test_trace.py
-
-# 单元测试
-pytest tests/unit_tests/ -v
-
-# 集成测试
-pytest tests/integration_tests/ -v
-
-# 双模型基准测试
-python tests/run_evals.py
+uv run ruff check .
+uv run pytest tests/unit_tests -q
 ```
 
----
+需要回归旧版图时，复制 `.env.example` 为 `.env` 并填写模型配置，然后运行：
 
-## 设计决策
+```bash
+uv run langgraph dev
+```
 
-### 为什么用 `--allow-blocking`？
+## 配置边界
 
-`langgraph dev` 的 ASGI 服务器会检测同步阻塞调用以保护事件循环。`python_repl` 工具使用 `eval()`、Chroma 内部调用 `tiktoken` → `os.getcwd()`，都会触发阻塞检测。已将 Chroma 调用封装为 `asyncio.to_thread()`，但 `eval()` 是纯 CPU 计算，不适用线程化。`--allow-blocking` 是 LangGraph 为此场景设计的 escape hatch。生产环境用 `langgraph serve` + 独立 worker 部署不受此限制。
+PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 
-### 为什么所有模式共享同一套工具？
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `PAPEROPS_ARTIFACTS_DIR` | `artifacts` | 解析产物和报告目录 |
+| `PAPEROPS_KNOWLEDGE_DIR` | `knowledge` | 本地科研文献输入目录 |
+| `PAPEROPS_MAX_PARSE_ATTEMPTS` | `2` | 单文档最大解析次数 |
 
-不按模式限制工具，而是通过 System Prompt 引导 LLM 判断该用哪些工具。Reflection 模式除外——它是纯推理循环，不调工具。这样做的好处是工具注册简单，LLM 可灵活判断（比如 Researcher 搜索过程中可能需要 `python_repl` 做简单计算）。
+MinerU 和 RAGFlow 地址将在真实适配器进入 PR3 时启用。密钥只保存在本地 `.env`，不得提交到仓库。
 
----
+## 上游与个人实现边界
+
+本仓库最初从 [LangGraph ReAct Agent Template](https://github.com/langchain-ai/react-agent) 拉取。上游提供了标准 Python `src/` 布局、模型/状态/工具骨架和一个基础 ReAct 循环。
+
+归档的 v0.1 原型在上游基础上新增或重构了 Plan-Solve、Reflection、Supervisor、模式路由、MCP、RAG、记忆、流式输出和评测代码。详细基线与提交证据见 [docs/upstream.md](docs/upstream.md)。PaperOps 产品化继续保留上游 Git 历史和 MIT 许可证。
+
+## 产品约束
+
+- 第一版只处理单文档，不承诺大规模批处理；
+- 不把规则可确定的步骤包装成 Agent；
+- 不在宿主进程执行不受信任的 Python；
+- 不用自定义综合分数代替任务成功率、检索命中率和人工介入率；
+- 不在代码和 README 中宣称尚未通过测试的生产能力。
+
+完整 MVP 范围和验收条件见 [docs/product-spec.md](docs/product-spec.md)。
 
 ## License
 
-MIT
+MIT。原始 LangGraph 模板版权声明保留在 [LICENSE](LICENSE) 中。

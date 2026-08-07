@@ -165,3 +165,11 @@ cython_debug/
 
 # Chroma persistent vector store
 .chroma_db/
+
+# PaperOps runtime data
+artifacts/
+paperops.db
+paperops.db-shm
+paperops.db-wal
+.tools/
+.uv-cache/
