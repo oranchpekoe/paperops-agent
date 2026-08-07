@@ -2,7 +2,7 @@
 name = "paperops-agent"
 version = "0.1.0"
 description = "A durable workflow for parsing, validating, and indexing research papers with MinerU and RAGFlow."
-authors = [
+maintainers = [
     { name = "oranchpekoe" },
 ]
 readme = "README.md"
@@ -81,7 +81,6 @@ lint.ignore = [
 ]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "UP", "T201"]
-"mcp_demo_server.py" = ["D"]
 "src/react_agent/mcp.py" = ["D"]
 "src/react_agent/memory.py" = ["D"]
 "src/react_agent/modes/supervisor.py" = ["D"]

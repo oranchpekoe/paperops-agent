@@ -75,6 +75,8 @@ docs/                         # 产品约束、上游归属和技术复盘
 
 仓库目录使用连字符 `multi-mode-agent`，Python 包使用合法标识符 `paperops`。`src/` 布局用于确保测试验证的是正确安装后的包，而不是碰巧从仓库根目录导入源码。
 
+新代码的类型边界、结构化输出和 Prompt 角色约定见 [工程约定](docs/engineering-conventions.md)。
+
 ## 开发环境
 
 前置条件：

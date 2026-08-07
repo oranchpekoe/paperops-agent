@@ -209,7 +209,7 @@ get_all_tools()
 - 支持 stdio 和 HTTP transport
 - 通过 `langchain-mcp-adapters` 的 `MultiServerMCPClient` 连接
 - **优雅降级**：单服务器失败 → 跳过该服务器（不阻塞启动）；整个包未安装 → 返回空列表
-- 示例配置已提供 `mcp_demo_server.py`（含 add / word_count 两个工具）
+- 当时用于验证连接的演示 Server（add / word_count）保留在 `v0.1-multimode-demo` 标签中，不属于当前 PaperOps 产品代码
 
 ### 4.4 RAG 文档检索
 
