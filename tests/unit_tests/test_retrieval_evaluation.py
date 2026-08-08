@@ -87,6 +87,19 @@ def test_qasper_converter_keeps_answerable_text_evidence(tmp_path: Path) -> None
                                 {"answer": {"unanswerable": True, "evidence": []}}
                             ],
                         },
+                        {
+                            "question_id": "question-3",
+                            "question": "What do annotators disagree about?",
+                            "answers": [
+                                {"answer": {"unanswerable": True, "evidence": []}},
+                                {
+                                    "answer": {
+                                        "unanswerable": False,
+                                        "evidence": [],
+                                    }
+                                },
+                            ],
+                        },
                     ],
                 }
             }
@@ -95,11 +108,27 @@ def test_qasper_converter_keeps_answerable_text_evidence(tmp_path: Path) -> None
     )
 
     dataset = convert_qasper(source, split="validation")
+    refusal_dataset = convert_qasper(
+        source,
+        split="validation",
+        max_answerable_queries=1,
+        max_unanswerable_queries=1,
+        include_unanswerable=True,
+    )
+    all_refusal_dataset = convert_qasper(
+        source,
+        split="validation",
+        include_unanswerable=True,
+    )
 
     assert dataset.kind == DatasetKind.BENCHMARK
     assert len(dataset.documents) == 1
     assert len(dataset.queries) == 1
     assert dataset.queries[0].evidence[0].relevance == 2
+    assert len(refusal_dataset.queries) == 2
+    assert refusal_dataset.queries[1].answerable is False
+    assert refusal_dataset.queries[1].evidence == []
+    assert len(all_refusal_dataset.queries) == 2
 
 
 @pytest.mark.asyncio

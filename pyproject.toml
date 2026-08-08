@@ -90,6 +90,7 @@ dev = [
 
 [tool.pytest.ini_options]
 addopts = "--basetemp=.pytest-tmp"
+testpaths = ["tests"]
 markers = [
     "integration: tests that require external services (API keys, Chroma, LLM).",
 ]

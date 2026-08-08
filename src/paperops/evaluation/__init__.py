@@ -1,6 +1,8 @@
 """Offline retrieval evaluation for PaperOps backends."""
 
+from paperops.evaluation.agent import evaluate_research_agent
 from paperops.evaluation.models import (
+    AgentEvaluationReport,
     DatasetKind,
     EvaluationDocument,
     EvaluationQuery,
@@ -16,6 +18,7 @@ from paperops.evaluation.retrieval import (
 
 __all__ = [
     "DatasetKind",
+    "AgentEvaluationReport",
     "EvidenceReference",
     "EvaluationDocument",
     "EvaluationQuery",
@@ -23,5 +26,6 @@ __all__ = [
     "RetrievalDataset",
     "RetrievalEvaluationReport",
     "evaluate_native_retrieval",
+    "evaluate_research_agent",
     "evaluate_retrieval_backend",
 ]

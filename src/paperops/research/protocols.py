@@ -6,6 +6,7 @@ from paperops.research.models import (
     AnswerSynthesisRequest,
     EvidenceAssessment,
     EvidenceAssessmentRequest,
+    ModelCallUsage,
     QueryRewrite,
     QueryRewriteRequest,
     ResearchAnswer,
@@ -31,3 +32,6 @@ class ResearchModel(Protocol):
         request: AnswerSynthesisRequest,
     ) -> ResearchAnswer:
         """Answer strictly from the supplied evidence."""
+
+    def drain_usage(self) -> list[ModelCallUsage]:
+        """Return and clear telemetry recorded since the previous drain."""

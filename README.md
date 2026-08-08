@@ -16,7 +16,8 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - PR2：使用 Fake Parser/Retrieval Backend 跑通单文档状态机、重试、人工中断、checkpoint 恢复和幂等入库；
 - PR3：已接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
 - PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线；
-- 当前 PR5：增加独立的论文调研 Query Graph，按证据充分度执行最多两轮查询改写与补检，校验 Chunk 引用，并在证据不足时拒答。
+- PR5：增加独立的论文调研 Query Graph，按证据充分度执行最多两轮查询改写与补检，校验 Chunk 引用，并在证据不足时拒答；
+- 当前 PR6：在同一语料、检索后端、模型和问题上，对比零次改写基线与有界补检 Agent，分别报告证据覆盖、拒答、引用、延迟、调用次数和供应商 token。
 
 > `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
@@ -221,6 +222,28 @@ curl http://127.0.0.1:8080/queries/<thread_id>
 ```
 
 默认 `PAPEROPS_RESEARCH_MODEL_MODE=fake` 只用于离线接线测试。真实查询需选择支持 JSON mode 的 OpenAI-compatible chat-completions 服务，并在未跟踪的 `.env` 中设置模型地址、名称和 Key。实现边界、状态流转和验收命令见 [PR5 调研 Agent 说明](docs/pr5-research-agent.md)。
+
+## PR6 Agent 对照评测
+
+QASPER 转换器可选择保留标注者一致认定的不可回答问题。评测命令将完全相同的 Query Graph 分别固定为 `max_rewrites=0` 和配置的有界改写次数：
+
+```bash
+uv run paperops-eval prepare-qasper \
+  --input .paperops-eval/qasper-source/qasper-dev-v0.3.json \
+  --output .paperops-eval/qasper-agent-dev.json \
+  --split validation \
+  --include-unanswerable
+
+uv run paperops-eval evaluate-agent \
+  --dataset .paperops-eval/qasper-agent-dev.json \
+  --output .paperops-eval/qasper-agent-report.json \
+  --work-dir .paperops-eval/qasper-agent \
+  --strategy native \
+  --search-top-k 10 \
+  --max-rewrites 2
+```
+
+Fake 模型和仓库内 `smoke_fixture` 只验证接线，不能作为效果结论。报告中的证据召回是多轮累计覆盖率，不等同于固定候选数的 Recall@K；引用指标也不代替答案语义正确率。数据规则、指标定义与真实模型复现边界见 [PR6 Agent 评测说明](docs/pr6-agent-evaluation.md)。
 
 ## 配置边界
 

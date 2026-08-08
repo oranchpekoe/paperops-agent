@@ -65,7 +65,17 @@ class EvaluationQuery(BaseModel):
 
     query_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
-    evidence: list[EvidenceReference] = Field(min_length=1)
+    answerable: bool = True
+    evidence: list[EvidenceReference] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_answerability(self) -> EvaluationQuery:
+        """Keep answerability labels consistent with paragraph evidence."""
+        if self.answerable and not self.evidence:
+            raise ValueError("answerable queries must contain evidence")
+        if not self.answerable and self.evidence:
+            raise ValueError("unanswerable queries must not contain evidence")
+        return self
 
 
 class RetrievalDataset(BaseModel):
@@ -160,3 +170,106 @@ class RetrievalEvaluationReport(BaseModel):
     indexing_latency_ms: float = Field(ge=0.0)
     aggregate: AggregateRetrievalMetrics
     queries: list[QueryEvaluation]
+
+
+class AgentRunEvaluation(BaseModel):
+    """Metrics from one graph configuration on one labelled question."""
+
+    status: str = Field(min_length=1)
+    outcome_correct: bool
+    latency_ms: float = Field(ge=0.0)
+    evidence_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    citation_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    citation_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    matched_evidence_ids: list[str] = Field(default_factory=list)
+    retrieval_calls: int = Field(ge=0)
+    rewrite_count: int = Field(ge=0)
+    model_calls: int = Field(ge=0)
+    attempted_queries: list[str] = Field(default_factory=list)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    model_latency_ms: float = Field(default=0.0, ge=0.0)
+    failure_code: str | None = None
+
+
+class AgentQueryComparison(BaseModel):
+    """Comparable one-shot and bounded-agent results for one query."""
+
+    query_id: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+    answerable: bool
+    baseline: AgentRunEvaluation
+    agent: AgentRunEvaluation
+
+
+class AgentVariantMetrics(BaseModel):
+    """Aggregate outcome, grounding, cost, and latency for one variant."""
+
+    outcome_accuracy: float = Field(ge=0.0, le=1.0)
+    answerable_completion_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    unanswerable_refusal_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    citation_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    citation_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    failure_rate: float = Field(ge=0.0, le=1.0)
+    average_retrieval_calls: float = Field(ge=0.0)
+    average_rewrites: float = Field(ge=0.0)
+    average_model_calls: float = Field(ge=0.0)
+    latency_p50_ms: float = Field(ge=0.0)
+    latency_p95_ms: float = Field(ge=0.0)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    model_latency_ms: float = Field(default=0.0, ge=0.0)
+
+
+class AgentMetricDelta(BaseModel):
+    """Bounded-agent aggregate minus the one-shot baseline."""
+
+    outcome_accuracy: float
+    evidence_recall: float | None = None
+    average_retrieval_calls: float
+    average_rewrites: float
+    average_model_calls: float
+    latency_p50_ms: float
+    total_tokens: int | None = None
+
+
+class AgentEvaluationReport(BaseModel):
+    """Reproducible one-shot versus bounded-agent comparison report."""
+
+    dataset_name: str = Field(min_length=1)
+    dataset_version: str = Field(min_length=1)
+    dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_kind: DatasetKind
+    split: str = Field(min_length=1)
+    backend: str = Field(min_length=1)
+    index_profile: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    document_count: int = Field(ge=1)
+    query_count: int = Field(ge=1)
+    answerable_query_count: int = Field(ge=0)
+    unanswerable_query_count: int = Field(ge=0)
+    search_top_k: int = Field(ge=1)
+    baseline_max_rewrites: int = Field(default=0, ge=0, le=0)
+    agent_max_rewrites: int = Field(ge=1)
+    evidence_token_coverage_threshold: float = Field(ge=0.0, le=1.0)
+    indexing_latency_ms: float = Field(ge=0.0)
+    baseline: AgentVariantMetrics
+    agent: AgentVariantMetrics
+    delta: AgentMetricDelta
+    queries: list[AgentQueryComparison]
+    limitations: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_query_counts(self) -> AgentEvaluationReport:
+        """Keep report provenance counts aligned with per-query records."""
+        if self.query_count != len(self.queries):
+            raise ValueError("query_count must match the number of query records")
+        answerable = sum(query.answerable for query in self.queries)
+        if self.answerable_query_count != answerable:
+            raise ValueError("answerable_query_count does not match query records")
+        if self.unanswerable_query_count != self.query_count - answerable:
+            raise ValueError("unanswerable_query_count does not match query records")
+        return self
