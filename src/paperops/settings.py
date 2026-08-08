@@ -59,6 +59,22 @@ class Settings(BaseSettings):
     retrieval_candidate_k: int = Field(default=20, ge=1, le=100)
     retrieval_rrf_k: int = Field(default=60, ge=1)
 
+    research_model_mode: Literal["fake", "openai_compatible"] = "fake"
+    research_model_base_url: str = "https://api.openai.com/v1"
+    research_model_api_key: SecretStr = SecretStr("")
+    research_model_name: str = "gpt-4o-mini"
+    research_model_timeout_seconds: float = Field(default=90.0, gt=0.0)
+    research_search_top_k: int = Field(default=10, ge=1, le=100)
+    research_max_rewrites: int = Field(default=2, ge=0, le=5)
+    research_min_evidence_hits: int = Field(default=1, ge=1, le=20)
+    research_min_assessment_confidence: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+    )
+    research_max_chunk_chars: int = Field(default=1600, ge=200, le=10000)
+    research_max_evidence_chars: int = Field(default=16000, ge=1000, le=100000)
+
     external_connect_timeout_seconds: float = Field(default=10.0, gt=0.0)
     external_read_timeout_seconds: float = Field(default=60.0, gt=0.0)
     external_write_timeout_seconds: float = Field(default=300.0, gt=0.0)

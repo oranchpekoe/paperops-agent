@@ -196,3 +196,56 @@ def test_api_rejects_non_pdf_payload(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert "PDF signature" in response.json()["detail"]
+
+
+def test_api_research_query_returns_checkpointed_citations(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    knowledge_base = FakeKnowledgeBaseClient()
+    app = create_app(
+        settings=settings,
+        parser=FakeParserClient(settings.artifacts_dir, [VALID_MARKDOWN]),
+        knowledge_base=knowledge_base,
+    )
+
+    with TestClient(app) as client:
+        ingestion = _submit(client)
+        _wait_for_job(
+            client,
+            ingestion["status_url"],
+            lambda job: job["status"] == "completed" and not job["running"],
+        )
+
+        accepted_response = client.post(
+            "/queries",
+            json={
+                "knowledge_base": "dataset-1",
+                "question": "How are multiple agents coordinated?",
+            },
+        )
+        assert accepted_response.status_code == 202, accepted_response.text
+        accepted = accepted_response.json()
+        completed = _wait_for_job(
+            client,
+            accepted["status_url"],
+            lambda query: query["status"] == "completed" and not query["running"],
+        )
+        health = client.get("/health").json()
+
+    assert completed["answer"]["citation_ids"] == ["E1"]
+    assert "[E1]" in completed["answer"]["text"]
+    assert completed["evidence"][0]["citation_id"] == "E1"
+    assert completed["retrieval_calls"] == 1
+    assert completed["model_calls"] == 2
+    assert health["research_model"] == "fake-research-model"
+
+    restarted_app = create_app(
+        settings=settings,
+        parser=FakeParserClient(settings.artifacts_dir),
+        knowledge_base=FakeKnowledgeBaseClient(),
+    )
+    with TestClient(restarted_app) as restarted_client:
+        recovered = restarted_client.get(accepted["status_url"])
+
+    assert recovered.status_code == 200
+    assert recovered.json()["status"] == "completed"
+    assert recovered.json()["answer"]["citation_ids"] == ["E1"]

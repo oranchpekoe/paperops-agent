@@ -7,6 +7,7 @@ from paperops.clients.errors import (
     MinerUTimeout,
     RAGFlowError,
     RAGFlowTimeout,
+    ResearchModelError,
 )
 from paperops.clients.fakes import FakeKnowledgeBaseClient, FakeParserClient
 from paperops.clients.protocols import (
@@ -27,4 +28,5 @@ __all__ = [
     "RetrievalBackend",
     "RAGFlowError",
     "RAGFlowTimeout",
+    "ResearchModelError",
 ]

@@ -23,3 +23,7 @@ class RAGFlowError(ExternalServiceError):
 
 class RAGFlowTimeout(RAGFlowError, ExternalServiceTimeout):
     """Report a RAGFlow indexing job that exceeded its deadline."""
+
+
+class ResearchModelError(ExternalServiceError):
+    """Report a failed or malformed research-model response."""
