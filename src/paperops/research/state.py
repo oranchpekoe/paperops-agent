@@ -33,6 +33,6 @@ class ResearchQueryState(TypedDict, total=False):
     assessment: EvidenceAssessment
     last_rewrite: QueryRewrite
     answer: ResearchAnswer
-    failure: ResearchFailure
+    failure: ResearchFailure | None
     errors: Annotated[list[ResearchFailure], operator.add]
     events: Annotated[list[ResearchEvent], operator.add]

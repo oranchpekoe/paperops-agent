@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     research_model_base_url: str = "https://api.openai.com/v1"
     research_model_api_key: SecretStr = SecretStr("")
     research_model_name: str = "gpt-4o-mini"
+    research_model_proxy_url: str = ""
     research_model_timeout_seconds: float = Field(default=90.0, gt=0.0)
     research_search_top_k: int = Field(default=10, ge=1, le=100)
     research_max_rewrites: int = Field(default=2, ge=0, le=5)

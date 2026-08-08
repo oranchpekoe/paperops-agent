@@ -54,6 +54,7 @@ class OpenAICompatibleResearchModel:
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=settings.research_model_timeout_seconds,
             trust_env=settings.external_trust_env,
+            proxy=settings.research_model_proxy_url or None,
             transport=transport,
         )
 

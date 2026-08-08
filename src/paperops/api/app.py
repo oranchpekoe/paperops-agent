@@ -89,6 +89,13 @@ _CHECKPOINT_TYPES = (
     ResearchStatus,
 )
 
+_RESEARCH_RETRY_PREDECESSORS = {
+    ResearchStatus.RETRIEVING: "initialize_query",
+    ResearchStatus.ASSESSING: "retrieve_evidence",
+    ResearchStatus.REWRITING: "assess_evidence",
+    ResearchStatus.ANSWERING: "assess_evidence",
+}
+
 
 def _checkpoint_serializer() -> JsonPlusSerializer:
     """Allow only the PaperOps types intentionally persisted in checkpoints."""
@@ -518,13 +525,39 @@ def create_app(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The research query is already running",
             )
-        if not view.next_nodes:
+        graph = request.app.state.research_graph
+        config = JobRunner.config(thread_id)
+        if not view.next_nodes and not (
+            view.failure is not None and view.failure.retryable
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The research query has no unfinished checkpoint to resume",
             )
         runner: JobRunner = request.app.state.research_runner
         try:
+            if not view.next_nodes and view.failure is not None:
+                predecessor = _RESEARCH_RETRY_PREDECESSORS.get(view.failure.stage)
+                if predecessor is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="The failed research stage cannot be retried",
+                    )
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "status": view.failure.stage,
+                        "failure": None,
+                        "events": [
+                            ResearchEvent(
+                                status=view.failure.stage,
+                                message="Explicit retry requested for failed stage.",
+                                retrieval_round=view.retrieval_round or None,
+                            )
+                        ],
+                    },
+                    as_node=predecessor,
+                )
             await runner.schedule(thread_id, None)
         except JobAlreadyRunningError as exc:
             raise HTTPException(

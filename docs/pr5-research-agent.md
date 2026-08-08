@@ -30,6 +30,8 @@ LangGraph 与普通代码保留控制权：
 - Chunk 内容和累计证据都有字符上限，防止 checkpoint 和 Prompt 无界增长；
 - 回答中的引用必须属于当前证据集合，且正文含对应 `[E<n>]` 标记；
 - 预算耗尽返回 `insufficient_evidence`，不生成无依据答案。
+- 检索或模型服务的可重试失败可通过 `/queries/{thread_id}/resume`
+  精确返回失败节点，不重复已经完成的检索轮次。
 
 ## 本地验收
 
@@ -48,6 +50,8 @@ PAPEROPS_RESEARCH_MODEL_MODE=openai_compatible
 PAPEROPS_RESEARCH_MODEL_BASE_URL=https://api.openai.com/v1
 PAPEROPS_RESEARCH_MODEL_API_KEY=replace-in-local-env-only
 PAPEROPS_RESEARCH_MODEL_NAME=gpt-4o-mini
+# 如果模型网关不能直连，可只为模型客户端指定代理：
+# PAPEROPS_RESEARCH_MODEL_PROXY_URL=http://127.0.0.1:7890
 ```
 
 启动 `uv run paperops-api`，完成论文入库后调用 `POST /queries`，再轮询返回的 `status_url`。如果服务在节点间中断，可调用 `POST /queries/{thread_id}/resume` 从 SQLite checkpoint 继续。
@@ -61,3 +65,4 @@ PAPEROPS_RESEARCH_MODEL_NAME=gpt-4o-mini
 - checkpoint 暂停恢复后不重复已完成检索；
 - HTTP 模型响应不是 JSON 或不符合 Pydantic schema；
 - API 完成查询后跨进程生命周期读取持久化结果。
+- 真实模型返回临时错误后，从失败节点显式恢复并保留原审计轨迹。

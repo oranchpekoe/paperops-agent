@@ -246,6 +246,7 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 | `PAPEROPS_RETRIEVAL_RRF_K` | `60` | Reciprocal Rank Fusion 平滑常数 |
 | `PAPEROPS_RETRIEVAL_PROBE_TOP_K` | `10` | 文档级索引探测的候选数量 |
 | `PAPEROPS_RESEARCH_MODEL_MODE` | `fake` | `fake` 或 `openai_compatible` 语义模型适配器 |
+| `PAPEROPS_RESEARCH_MODEL_PROXY_URL` | 空 | 仅供研究模型 HTTP 客户端使用的可选代理地址 |
 | `PAPEROPS_RESEARCH_SEARCH_TOP_K` | `10` | 每轮调研查询的候选 Chunk 上限 |
 | `PAPEROPS_RESEARCH_MAX_REWRITES` | `2` | 证据不足时允许的查询改写次数 |
 | `PAPEROPS_RESEARCH_MIN_ASSESSMENT_CONFIDENCE` | `0.65` | 允许进入回答节点的最低充分度置信度 |
