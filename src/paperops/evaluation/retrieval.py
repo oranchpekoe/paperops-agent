@@ -221,6 +221,7 @@ class EvaluationCorpusIndex:
     collection_id: str
     dataset_sha256: str
     backend_to_logical_document_id: dict[str, str]
+    logical_to_backend_document_id: dict[str, str]
     indexing_latency_ms: float
 
 
@@ -279,6 +280,11 @@ async def evaluate_retrieval_backend(
             SearchRequest(
                 knowledge_base=corpus.collection_id,
                 query=query.text,
+                expected_document_id=(
+                    corpus.logical_to_backend_document_id[query.document_id]
+                    if query.document_id is not None
+                    else None
+                ),
                 top_k=limits[-1],
             )
         )
@@ -331,6 +337,7 @@ async def index_evaluation_corpus(
     corpus_dir = work_dir / "corpus"
     corpus_dir.mkdir(parents=True, exist_ok=True)
     backend_to_logical_document_id: dict[str, str] = {}
+    logical_to_backend_document_id: dict[str, str] = {}
 
     indexing_started = perf_counter()
     for document in dataset.documents:
@@ -355,11 +362,13 @@ async def index_evaluation_corpus(
             )
         )
         backend_to_logical_document_id[result.document_id] = document.document_id
+        logical_to_backend_document_id[document.document_id] = result.document_id
     indexing_latency_ms = (perf_counter() - indexing_started) * 1000
     return EvaluationCorpusIndex(
         collection_id=collection,
         dataset_sha256=fingerprint,
         backend_to_logical_document_id=backend_to_logical_document_id,
+        logical_to_backend_document_id=logical_to_backend_document_id,
         indexing_latency_ms=indexing_latency_ms,
     )
 

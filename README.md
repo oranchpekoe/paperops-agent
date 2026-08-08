@@ -17,7 +17,8 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - PR3：已接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
 - PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线；
 - PR5：增加独立的论文调研 Query Graph，按证据充分度执行最多两轮查询改写与补检，校验 Chunk 引用，并在证据不足时拒答；
-- 当前 PR6：在同一语料、检索后端、模型和问题上，对比零次改写基线与有界补检 Agent，分别报告证据覆盖、拒答、引用、延迟、调用次数和供应商 token。
+- PR6：在同一语料、检索后端、模型和问题上，对比零次改写基线与有界补检 Agent，分别报告证据覆盖、拒答、引用、延迟、调用次数和供应商 token；
+- 当前 PR7：让两组共享初始检索与判断，按所属论文约束 QASPER 检索；补检无新增证据时提前停止，并只把充分度判断选出的最小相关证据集交给回答模型。
 
 > `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
@@ -207,7 +208,7 @@ uv run paperops-eval evaluate \
   --strategy hybrid
 ```
 
-在固定的 QASPER dev 50 篇/148 问题诊断子集上，Dense 单路没有超过 BM25；Sparse + Dense RRF 将 Recall@10 从 0.382 提升至 0.429，交叉编码器重排进一步提升到 0.479，但带来明显 CPU 延迟。因此服务默认值保持 `native`，`dense`、`hybrid` 和 `hybrid_reranked` 必须显式选择。数据转换规则、完整指标、复现命令和限制见 [PR4 检索评测说明](docs/pr4-retrieval-evaluation.md)。
+PR4 的历史 Collection 级 QASPER dev 50 篇/148 问题诊断中，Dense 单路没有超过 BM25；Sparse + Dense RRF 将 Recall@10 从 0.382 提升至 0.429，交叉编码器重排进一步提升到 0.479，但带来明显 CPU 延迟。因此服务默认值保持 `native`，`dense`、`hybrid` 和 `hybrid_reranked` 必须显式选择。PR7 已把新转换数据修正为论文级作用域，两版数字不能直接比较；数据规则、完整指标和迁移说明见 [PR4 检索评测说明](docs/pr4-retrieval-evaluation.md)。
 
 ## PR5 论文调研查询 API
 
@@ -223,9 +224,9 @@ curl http://127.0.0.1:8080/queries/<thread_id>
 
 默认 `PAPEROPS_RESEARCH_MODEL_MODE=fake` 只用于离线接线测试。真实查询需选择支持 JSON mode 的 OpenAI-compatible chat-completions 服务，并在未跟踪的 `.env` 中设置模型地址、名称和 Key。实现边界、状态流转和验收命令见 [PR5 调研 Agent 说明](docs/pr5-research-agent.md)。
 
-## PR6 Agent 对照评测
+## PR7 配对 Agent 评测
 
-QASPER 转换器可选择保留标注者一致认定的不可回答问题。评测命令将完全相同的 Query Graph 分别固定为 `max_rewrites=0` 和配置的有界改写次数：
+QASPER 转换器可选择保留标注者一致认定的不可回答问题，并为每个问题保存所属论文 ID。评测在初始充分度判断后分叉：零改写基线立即停止，有界 Agent 只在证据不足时从同一 checkpoint 继续补检：
 
 ```bash
 uv run paperops-eval prepare-qasper \
@@ -243,7 +244,7 @@ uv run paperops-eval evaluate-agent \
   --max-rewrites 2
 ```
 
-Fake 模型和仓库内 `smoke_fixture` 只验证接线，不能作为效果结论。报告中的证据召回是多轮累计覆盖率，不等同于固定候选数的 Recall@K；引用指标也不代替答案语义正确率。数据规则、指标定义与真实模型复现边界见 [PR6 Agent 评测说明](docs/pr6-agent-evaluation.md)。
+Fake 模型和仓库内 `smoke_fixture` 只验证接线，不能作为效果结论。报告中的证据召回是多轮累计覆盖率，不等同于固定候选数的 Recall@K；引用指标也不代替答案语义正确率。PR7 的真实 3+3 诊断中，有界改写没有提升结果正确率，额外消耗 5,241 tokens；协议、止损机制和完整结论边界见 [PR7 自适应停止与配对评测](docs/pr7-adaptive-research.md)。PR6 的初版协议作为历史记录保留在 [PR6 Agent 评测说明](docs/pr6-agent-evaluation.md)。
 
 ## 配置边界
 
@@ -271,8 +272,10 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 | `PAPEROPS_RESEARCH_MODEL_MODE` | `fake` | `fake` 或 `openai_compatible` 语义模型适配器 |
 | `PAPEROPS_RESEARCH_MODEL_PROXY_URL` | 空 | 仅供研究模型 HTTP 客户端使用的可选代理地址 |
 | `PAPEROPS_RESEARCH_SEARCH_TOP_K` | `10` | 每轮调研查询的候选 Chunk 上限 |
-| `PAPEROPS_RESEARCH_MAX_REWRITES` | `2` | 证据不足时允许的查询改写次数 |
+| `PAPEROPS_RESEARCH_MAX_REWRITES` | `0` | 证据不足时允许的查询改写次数；实验评测可显式设为 `2` |
 | `PAPEROPS_RESEARCH_MIN_ASSESSMENT_CONFIDENCE` | `0.65` | 允许进入回答节点的最低充分度置信度 |
+| `PAPEROPS_RESEARCH_MAX_SELECTED_EVIDENCE` | `5` | 回答模型可接收的相关证据数量上限 |
+| `PAPEROPS_RESEARCH_STOP_ON_STAGNANT_RETRIEVAL` | `true` | 改写后没有新增证据时是否提前停止 |
 | `PAPEROPS_RESEARCH_MAX_EVIDENCE_CHARS` | `16000` | 写入单个查询 checkpoint 的证据字符总预算 |
 | `PAPEROPS_RAGFLOW_BASE_URL` | `http://localhost:9380` | 可选 RAGFlow 后端地址 |
 | `PAPEROPS_RAGFLOW_API_KEY` | 空 | 仅选择 RAGFlow 后端时必需 |

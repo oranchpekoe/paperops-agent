@@ -635,6 +635,7 @@ async def _research_query_view(
         retrieval_round=values.get("retrieval_round", 0),
         rewrite_count=values.get("rewrite_count", 0),
         retrieval_calls=values.get("retrieval_calls", 0),
+        new_evidence_count=values.get("new_evidence_count", 0),
         model_calls=values.get("model_calls", 0),
         attempted_queries=values.get("attempted_queries", []),
         evidence=values.get("evidence", []),
@@ -642,6 +643,7 @@ async def _research_query_view(
         last_rewrite=values.get("last_rewrite"),
         answer=values.get("answer"),
         failure=values.get("failure"),
+        stop_reason=values.get("stop_reason"),
         events=values.get("events", []),
         runtime_error=runner.runtime_error(thread_id),
     )

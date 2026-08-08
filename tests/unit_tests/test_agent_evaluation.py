@@ -27,6 +27,7 @@ def _insufficient() -> EvidenceAssessment:
         confidence=0.9,
         rationale="The current passage does not contain the labelled answer.",
         missing_aspects=["target evidence"],
+        relevant_citation_ids=[],
     )
 
 
@@ -35,6 +36,7 @@ def _sufficient() -> EvidenceAssessment:
         sufficient=True,
         confidence=0.95,
         rationale="The target evidence is present.",
+        relevant_citation_ids=["E2"],
     )
 
 
@@ -108,6 +110,7 @@ def _dataset() -> RetrievalDataset:
             EvaluationQuery(
                 query_id="answerable",
                 text="Which method does the study use?",
+                document_id="paper-1",
                 evidence=[
                     EvidenceReference(
                         evidence_id="ev-method",
@@ -119,6 +122,7 @@ def _dataset() -> RetrievalDataset:
             EvaluationQuery(
                 query_id="unanswerable",
                 text="Which year was the method launched?",
+                document_id="paper-1",
                 answerable=False,
             ),
         ],
@@ -129,8 +133,7 @@ def _dataset() -> RetrievalDataset:
 async def test_agent_evaluation_measures_recovery_refusal_and_cost(
     tmp_path: Path,
 ) -> None:
-    baseline_model = FakeResearchModel(assessments=[_insufficient(), _insufficient()])
-    agent_model = FakeResearchModel(
+    model = FakeResearchModel(
         assessments=[
             _insufficient(),
             _sufficient(),
@@ -170,8 +173,7 @@ async def test_agent_evaluation_measures_recovery_refusal_and_cost(
     report = await evaluate_research_agent(
         _dataset(),
         backend=EvaluationBackend(),
-        baseline_model=baseline_model,
-        agent_model=agent_model,
+        model=model,
         settings=settings,
         work_dir=tmp_path / "evaluation",
         index_profile="scripted-v1",
@@ -190,5 +192,58 @@ async def test_agent_evaluation_measures_recovery_refusal_and_cost(
     assert report.agent.average_retrieval_calls == 2.5
     assert report.agent.average_rewrites == 1.5
     assert report.agent.total_tokens is None
+    assert report.comparison_protocol == "shared_initial_retrieval_and_assessment_v1"
+    assert report.delta.baseline_missed_answerable == 1
+    assert report.delta.recovered_answerable == 1
+    assert report.delta.answerable_recovery_rate == 1.0
     assert report.queries[0].agent.matched_evidence_ids == ["ev-method"]
     assert report.queries[1].agent.status == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
+async def test_paired_evaluation_reuses_identical_successful_prefix(
+    tmp_path: Path,
+) -> None:
+    model = FakeResearchModel(
+        assessments=[
+            EvidenceAssessment(
+                sufficient=True,
+                confidence=0.95,
+                rationale="The first retrieved passage directly answers the question.",
+                relevant_citation_ids=["E1"],
+            ),
+            _insufficient(),
+            _insufficient(),
+            _insufficient(),
+        ],
+        rewrites=[
+            QueryRewrite(
+                query="launch year source one",
+                reason="Search for a launch date.",
+            ),
+            QueryRewrite(
+                query="launch year source two",
+                reason="Try a second date-specific query.",
+            ),
+        ],
+    )
+    settings = Settings(
+        _env_file=None,
+        native_index_db=tmp_path / "index.db",
+        research_search_top_k=1,
+        research_max_rewrites=2,
+    )
+
+    report = await evaluate_research_agent(
+        _dataset(),
+        backend=EvaluationBackend(),
+        model=model,
+        settings=settings,
+        work_dir=tmp_path / "paired",
+        index_profile="scripted-v1",
+    )
+
+    first = report.queries[0]
+    assert first.baseline == first.agent
+    assert first.baseline.citation_precision == 0.0
+    assert len(model.answer_calls) == 1

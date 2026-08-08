@@ -22,15 +22,22 @@ from paperops.research.models import (
     ResearchFailure,
     ResearchFailureCode,
     ResearchStatus,
+    ResearchStopReason,
 )
 from paperops.research.protocols import ResearchModel
 from paperops.research.state import ResearchQueryState
 from paperops.settings import Settings
 
 
-def _query_id(knowledge_base: str, question: str) -> str:
+def _query_id(
+    knowledge_base: str,
+    question: str,
+    expected_document_id: str | None,
+) -> str:
     """Derive a stable logical identity without replacing checkpoint thread ids."""
-    digest = hashlib.sha256(f"{knowledge_base}:{question}".encode()).hexdigest()
+    digest = hashlib.sha256(
+        f"{knowledge_base}:{expected_document_id or '*'}:{question}".encode()
+    ).hexdigest()
     return f"query-{digest[:16]}"
 
 
@@ -59,6 +66,14 @@ def _failure_update(
             )
         ],
     }
+
+
+def _append_single_inline_citation(text: str, citation_id: str) -> str:
+    """Repair one unambiguous omitted marker without guessing claim boundaries."""
+    normalized = text.rstrip()
+    if normalized[-1:] in {".", "!", "?", "。", "！", "？"}:
+        return f"{normalized[:-1].rstrip()} [{citation_id}]{normalized[-1]}"
+    return f"{normalized} [{citation_id}]"
 
 
 def _hit_key(hit: SearchHit) -> str:
@@ -121,6 +136,9 @@ class ResearchNodes:
         """Validate and normalize the immutable query inputs."""
         knowledge_base = state.get("knowledge_base", "").strip()
         question = state.get("question", "").strip()
+        expected_document_id = state.get("expected_document_id")
+        if expected_document_id is not None:
+            expected_document_id = expected_document_id.strip() or None
         if not knowledge_base or not question:
             return _failure_update(
                 ResearchStatus.PENDING,
@@ -128,14 +146,20 @@ class ResearchNodes:
                 "Both knowledge_base and question are required.",
             )
         return {
-            "query_id": _query_id(knowledge_base, question),
+            "query_id": _query_id(
+                knowledge_base,
+                question,
+                expected_document_id,
+            ),
             "knowledge_base": knowledge_base,
+            "expected_document_id": expected_document_id,
             "question": question,
             "current_query": question,
             "status": ResearchStatus.RETRIEVING,
             "retrieval_round": 0,
             "rewrite_count": 0,
             "retrieval_calls": 0,
+            "new_evidence_count": 0,
             "model_calls": 0,
             "attempted_queries": [],
             "evidence": [],
@@ -156,6 +180,7 @@ class ResearchNodes:
                 SearchRequest(
                     knowledge_base=state["knowledge_base"],
                     query=query,
+                    expected_document_id=state.get("expected_document_id"),
                     top_k=self.settings.research_search_top_k,
                 )
             )
@@ -169,26 +194,51 @@ class ResearchNodes:
             update["retrieval_calls"] = state.get("retrieval_calls", 0) + 1
             return update
 
+        previous_evidence = state.get("evidence", [])
         evidence = _merge_evidence(
-            state.get("evidence", []),
+            previous_evidence,
             hits,
             query=query,
             retrieval_round=retrieval_round,
             max_chunk_chars=self.settings.research_max_chunk_chars,
             max_evidence_chars=self.settings.research_max_evidence_chars,
         )
+        new_evidence_count = len(evidence) - len(previous_evidence)
+        stagnant = (
+            self.settings.research_stop_on_stagnant_retrieval
+            and retrieval_round > 1
+            and new_evidence_count == 0
+        )
         return {
-            "status": ResearchStatus.ASSESSING,
+            "status": (
+                ResearchStatus.INSUFFICIENT_EVIDENCE
+                if stagnant
+                else ResearchStatus.ASSESSING
+            ),
             "retrieval_round": retrieval_round,
             "retrieval_calls": state.get("retrieval_calls", 0) + 1,
+            "new_evidence_count": new_evidence_count,
             "attempted_queries": [*state.get("attempted_queries", []), query],
             "evidence": evidence,
+            **(
+                {"stop_reason": ResearchStopReason.STAGNANT_RETRIEVAL}
+                if stagnant
+                else {}
+            ),
             "events": [
                 ResearchEvent(
-                    status=ResearchStatus.RETRIEVING,
+                    status=(
+                        ResearchStatus.INSUFFICIENT_EVIDENCE
+                        if stagnant
+                        else ResearchStatus.RETRIEVING
+                    ),
                     message=(
-                        f"Retrieved {len(hits)} hit(s); retained "
-                        f"{len(evidence)} unique evidence chunk(s)."
+                        "Rewritten query added no new evidence; stopped safely."
+                        if stagnant
+                        else (
+                            f"Retrieved {len(hits)} hit(s); added "
+                            f"{new_evidence_count} new evidence chunk(s)."
+                        )
                     ),
                     retrieval_round=retrieval_round,
                 )
@@ -204,6 +254,7 @@ class ResearchNodes:
                 confidence=1.0,
                 rationale="The deterministic minimum evidence policy was not met.",
                 missing_aspects=["retrievable supporting evidence"],
+                relevant_citation_ids=[],
             )
             model_calls = state.get("model_calls", 0)
         else:
@@ -236,6 +287,23 @@ class ResearchNodes:
                 return update
             model_calls = state.get("model_calls", 0) + 1
 
+        available = {item.citation_id for item in evidence}
+        selected = assessment.relevant_citation_ids
+        unknown = set(selected) - available
+        if unknown or len(selected) > self.settings.research_max_selected_evidence:
+            details = []
+            if unknown:
+                details.append(f"unknown relevant citations: {sorted(unknown)}")
+            if len(selected) > self.settings.research_max_selected_evidence:
+                details.append("relevant citations exceed configured selection limit")
+            update = _failure_update(
+                ResearchStatus.ASSESSING,
+                ResearchFailureCode.INVALID_MODEL_OUTPUT,
+                "; ".join(details),
+            )
+            update["model_calls"] = model_calls
+            return update
+
         if (
             assessment.sufficient
             and assessment.confidence < self.settings.research_min_assessment_confidence
@@ -248,6 +316,7 @@ class ResearchNodes:
                     "answer threshold."
                 ),
                 missing_aspects=["higher-confidence supporting evidence"],
+                relevant_citation_ids=assessment.relevant_citation_ids,
             )
         return {
             "status": ResearchStatus.ASSESSING,
@@ -311,6 +380,7 @@ class ResearchNodes:
                 "status": ResearchStatus.INSUFFICIENT_EVIDENCE,
                 "last_rewrite": rewrite,
                 "model_calls": state.get("model_calls", 0) + 1,
+                "stop_reason": ResearchStopReason.DUPLICATE_QUERY,
                 "events": [
                     ResearchEvent(
                         status=ResearchStatus.INSUFFICIENT_EVIDENCE,
@@ -336,12 +406,16 @@ class ResearchNodes:
 
     async def synthesize(self, state: ResearchQueryState) -> dict[str, Any]:
         """Generate an evidence-only answer and validate every citation."""
+        selected_ids = set(state["assessment"].relevant_citation_ids)
+        selected_evidence = [
+            item for item in state["evidence"] if item.citation_id in selected_ids
+        ]
         try:
             answer = ResearchAnswer.model_validate(
                 await self.model.synthesize_answer(
                     AnswerSynthesisRequest(
                         question=state["question"],
-                        evidence=state["evidence"],
+                        evidence=selected_evidence,
                     )
                 )
             )
@@ -363,10 +437,22 @@ class ResearchNodes:
             update["model_calls"] = state.get("model_calls", 0) + 1
             return update
 
-        available = {item.citation_id for item in state["evidence"]}
+        available = {item.citation_id for item in selected_evidence}
         cited = answer.citation_ids
         invalid = set(cited) - available
         missing_inline = [item for item in cited if f"[{item}]" not in answer.text]
+        if (
+            not invalid
+            and len(cited) == 1
+            and len(set(cited)) == 1
+            and missing_inline == cited
+        ):
+            answer = answer.model_copy(
+                update={
+                    "text": _append_single_inline_citation(answer.text, cited[0]),
+                }
+            )
+            missing_inline = []
         if invalid or missing_inline or len(cited) != len(set(cited)):
             details = []
             if invalid:
@@ -399,6 +485,7 @@ class ResearchNodes:
         """Stop after the configured rewrite budget without fabricating an answer."""
         return {
             "status": ResearchStatus.INSUFFICIENT_EVIDENCE,
+            "stop_reason": ResearchStopReason.BUDGET_EXHAUSTED,
             "events": [
                 ResearchEvent(
                     status=ResearchStatus.INSUFFICIENT_EVIDENCE,

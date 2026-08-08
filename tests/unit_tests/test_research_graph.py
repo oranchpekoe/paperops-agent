@@ -16,6 +16,7 @@ from paperops.research.models import (
     ResearchAnswer,
     ResearchFailureCode,
     ResearchStatus,
+    ResearchStopReason,
 )
 from paperops.settings import Settings
 
@@ -94,6 +95,24 @@ async def test_one_round_answer_has_resolvable_inline_citation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_can_limit_retrieval_to_one_indexed_document() -> None:
+    scoped_input = {**_input(), "expected_document_id": "paper-expected"}
+    retrieval = ScriptedRetrieval({scoped_input["question"]: [_hit()]})
+    graph = build_research_graph(
+        retrieval=retrieval,
+        model=FakeResearchModel(),
+        settings=_settings(),
+        checkpointer=InMemorySaver(),
+    )
+
+    result = await graph.ainvoke(scoped_input, _config("document-scoped"))
+
+    assert result["status"] is ResearchStatus.COMPLETED
+    assert result["expected_document_id"] == "paper-expected"
+    assert retrieval.search_calls[0].expected_document_id == "paper-expected"
+
+
+@pytest.mark.asyncio
 async def test_insufficient_evidence_rewrites_then_recovers() -> None:
     question = _input()["question"]
     rewritten = "hybrid retrieval recall results"
@@ -120,14 +139,31 @@ async def test_insufficient_evidence_rewrites_then_recovers() -> None:
 @pytest.mark.asyncio
 async def test_rewrite_budget_exhaustion_refuses_without_answer() -> None:
     question = _input()["question"]
+    retrieval = ScriptedRetrieval(
+        {
+            question: [_hit("chunk-1", "Partial evidence one.")],
+            "rewrite one": [_hit("chunk-2", "Partial evidence two.")],
+            "rewrite two": [_hit("chunk-3", "Partial evidence three.")],
+        }
+    )
     model = FakeResearchModel(
+        assessments=[
+            EvidenceAssessment(
+                sufficient=False,
+                confidence=0.9,
+                rationale="A required detail is missing.",
+                missing_aspects=["additional detail"],
+                relevant_citation_ids=[],
+            )
+            for _ in range(3)
+        ],
         rewrites=[
             QueryRewrite(query="rewrite one", reason="First missing aspect."),
             QueryRewrite(query="rewrite two", reason="Second missing aspect."),
-        ]
+        ],
     )
     graph = build_research_graph(
-        retrieval=ScriptedRetrieval({}),
+        retrieval=retrieval,
         model=model,
         settings=_settings(),
         checkpointer=InMemorySaver(),
@@ -139,8 +175,46 @@ async def test_rewrite_budget_exhaustion_refuses_without_answer() -> None:
     assert result["rewrite_count"] == 2
     assert result["retrieval_calls"] == 3
     assert result["attempted_queries"] == [question, "rewrite one", "rewrite two"]
+    assert result["stop_reason"] is ResearchStopReason.BUDGET_EXHAUSTED
     assert "answer" not in result
     assert model.answer_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stagnant_rewrite_stops_before_another_model_judgment() -> None:
+    question = _input()["question"]
+    duplicate = _hit("chunk-1", "Only the same partial evidence is available.")
+    retrieval = ScriptedRetrieval({question: [duplicate], "focused query": [duplicate]})
+    model = FakeResearchModel(
+        assessments=[
+            EvidenceAssessment(
+                sufficient=False,
+                confidence=0.9,
+                rationale="The result is incomplete.",
+                missing_aspects=["missing result"],
+                relevant_citation_ids=[],
+            )
+        ],
+        rewrites=[
+            QueryRewrite(query="focused query", reason="Target the missing result.")
+        ],
+    )
+    graph = build_research_graph(
+        retrieval=retrieval,
+        model=model,
+        settings=_settings(),
+        checkpointer=InMemorySaver(),
+    )
+
+    result = await graph.ainvoke(_input(), _config("stagnant-retrieval"))
+
+    assert result["status"] is ResearchStatus.INSUFFICIENT_EVIDENCE
+    assert result["stop_reason"] is ResearchStopReason.STAGNANT_RETRIEVAL
+    assert result["retrieval_calls"] == 2
+    assert result["rewrite_count"] == 1
+    assert result["new_evidence_count"] == 0
+    assert result["model_calls"] == 2
+    assert len(model.assessment_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -158,11 +232,13 @@ async def test_low_confidence_assessment_spends_bounded_rewrite_budget() -> None
                 sufficient=True,
                 confidence=0.4,
                 rationale="Evidence is plausible but uncertain.",
+                relevant_citation_ids=["E1"],
             ),
             EvidenceAssessment(
                 sufficient=True,
                 confidence=0.9,
                 rationale="Independent evidence is sufficient.",
+                relevant_citation_ids=["E2"],
             ),
         ],
         rewrites=[QueryRewrite(query="more evidence", reason="Increase confidence.")],
@@ -179,6 +255,7 @@ async def test_low_confidence_assessment_spends_bounded_rewrite_budget() -> None
     assert result["status"] is ResearchStatus.COMPLETED
     assert result["rewrite_count"] == 1
     assert len(result["evidence"]) == 2
+    assert [item.citation_id for item in model.answer_calls[0].evidence] == ["E2"]
 
 
 @pytest.mark.asyncio
@@ -203,6 +280,59 @@ async def test_invalid_citation_fails_closed() -> None:
 
     assert result["status"] is ResearchStatus.FAILED
     assert result["failure"].code is ResearchFailureCode.CITATION_VALIDATION_ERROR
+
+
+@pytest.mark.asyncio
+async def test_single_valid_citation_missing_inline_marker_is_repaired() -> None:
+    question = _input()["question"]
+    model = FakeResearchModel(
+        answers=[
+            ResearchAnswer(
+                text="The workflow coordinates specialist agents.",
+                citation_ids=["E1"],
+            )
+        ]
+    )
+    graph = build_research_graph(
+        retrieval=ScriptedRetrieval({question: [_hit()]}),
+        model=model,
+        settings=_settings(),
+        checkpointer=InMemorySaver(),
+    )
+
+    result = await graph.ainvoke(_input(), _config("repair-inline-citation"))
+
+    assert result["status"] is ResearchStatus.COMPLETED
+    assert result["answer"].text == ("The workflow coordinates specialist agents [E1].")
+    assert result["answer"].citation_ids == ["E1"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_relevant_evidence_selection_fails_before_synthesis() -> None:
+    question = _input()["question"]
+    model = FakeResearchModel(
+        assessments=[
+            EvidenceAssessment(
+                sufficient=True,
+                confidence=0.9,
+                rationale="The selected evidence appears sufficient.",
+                relevant_citation_ids=["E99"],
+            )
+        ]
+    )
+    graph = build_research_graph(
+        retrieval=ScriptedRetrieval({question: [_hit()]}),
+        model=model,
+        settings=_settings(),
+        checkpointer=InMemorySaver(),
+    )
+
+    result = await graph.ainvoke(_input(), _config("unknown-selection"))
+
+    assert result["status"] is ResearchStatus.FAILED
+    assert result["failure"].code is ResearchFailureCode.INVALID_MODEL_OUTPUT
+    assert "unknown relevant citations" in result["failure"].message
+    assert model.answer_calls == []
 
 
 @pytest.mark.asyncio

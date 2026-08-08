@@ -8,6 +8,9 @@ from pathlib import Path
 from time import perf_counter
 from typing import cast
 
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph.state import CompiledStateGraph
 
 from paperops.clients.protocols import RetrievalBackend
@@ -28,13 +31,45 @@ from paperops.evaluation.retrieval import (
 )
 from paperops.research.graph import build_research_graph
 from paperops.research.models import (
+    EvidenceAssessment,
     EvidenceCitation,
     ModelCallUsage,
+    QueryRewrite,
+    ResearchAnswer,
+    ResearchEvent,
+    ResearchFailure,
+    ResearchFailureCode,
     ResearchStatus,
+    ResearchStopReason,
 )
 from paperops.research.protocols import ResearchModel
 from paperops.research.state import ResearchQueryState
 from paperops.settings import Settings
+
+ResearchGraph = CompiledStateGraph[
+    ResearchQueryState,
+    None,
+    ResearchQueryState,
+    ResearchQueryState,
+]
+
+
+def _evaluation_checkpointer() -> InMemorySaver:
+    """Allow only the explicit PaperOps state types used by paired evaluation."""
+    serializer = JsonPlusSerializer(
+        allowed_msgpack_modules=(
+            ResearchStatus,
+            ResearchStopReason,
+            EvidenceCitation,
+            EvidenceAssessment,
+            QueryRewrite,
+            ResearchAnswer,
+            ResearchFailure,
+            ResearchFailureCode,
+            ResearchEvent,
+        )
+    )
+    return InMemorySaver(serde=serializer)
 
 
 def _matched_evidence_ids(
@@ -85,33 +120,15 @@ def _token_totals(
     )
 
 
-async def _run_query(
+def _evaluate_result(
     *,
-    graph: CompiledStateGraph[
-        ResearchQueryState,
-        None,
-        ResearchQueryState,
-        ResearchQueryState,
-    ],
-    model: ResearchModel,
+    result: ResearchQueryState,
+    usage: list[ModelCallUsage],
+    latency_ms: float,
     query: EvaluationQuery,
     corpus: EvaluationCorpusIndex,
     threshold: float,
 ) -> AgentRunEvaluation:
-    model.drain_usage()
-    started = perf_counter()
-    result = cast(
-        ResearchQueryState,
-        await graph.ainvoke(
-            {
-                "knowledge_base": corpus.collection_id,
-                "question": query.text,
-            }
-        ),
-    )
-    latency_ms = (perf_counter() - started) * 1000
-    usage = model.drain_usage()
-
     status = result.get("status", ResearchStatus.FAILED)
     evidence = result.get("evidence", [])
     matched = _matched_evidence_ids(query, evidence, corpus, threshold)
@@ -150,6 +167,7 @@ async def _run_query(
         model_calls,
     )
     failure = result.get("failure")
+    assessment = result.get("assessment")
     return AgentRunEvaluation(
         status=status.value if isinstance(status, ResearchStatus) else str(status),
         outcome_correct=outcome_correct,
@@ -159,6 +177,7 @@ async def _run_query(
         citation_recall=citation_recall,
         matched_evidence_ids=sorted(matched),
         retrieval_calls=result.get("retrieval_calls", 0),
+        new_evidence_count=result.get("new_evidence_count", 0),
         rewrite_count=result.get("rewrite_count", 0),
         model_calls=model_calls,
         attempted_queries=result.get("attempted_queries", []),
@@ -166,8 +185,142 @@ async def _run_query(
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         model_latency_ms=model_latency_ms,
+        assessment_confidence=(
+            assessment.confidence if assessment is not None else None
+        ),
+        assessment_rationale=(assessment.rationale if assessment is not None else None),
+        selected_citation_ids=(
+            assessment.relevant_citation_ids if assessment is not None else []
+        ),
+        answer_text=answer.text if answer is not None else None,
+        answer_citation_ids=answer.citation_ids if answer is not None else [],
         failure_code=failure.code.value if failure is not None else None,
+        failure_message=failure.message if failure is not None else None,
+        stop_reason=(
+            result["stop_reason"].value
+            if isinstance(result.get("stop_reason"), ResearchStopReason)
+            else result.get("stop_reason")
+        ),
     )
+
+
+async def _resume_to_terminal(
+    *,
+    graph: ResearchGraph,
+    model: ResearchModel,
+    config: RunnableConfig,
+    initial: ResearchQueryState,
+    max_resumes: int,
+) -> tuple[ResearchQueryState, list[ModelCallUsage], float]:
+    result = initial
+    usage: list[ModelCallUsage] = []
+    latency_ms = 0.0
+    for _ in range(max_resumes):
+        snapshot = await graph.aget_state(config)
+        if not snapshot.next:
+            return result, usage, latency_ms
+        started = perf_counter()
+        result = cast(ResearchQueryState, await graph.ainvoke(None, config))
+        latency_ms += (perf_counter() - started) * 1000
+        usage.extend(model.drain_usage())
+    raise RuntimeError("Paired evaluation exceeded the bounded graph resume count")
+
+
+async def _run_paired_query(
+    *,
+    graph: ResearchGraph,
+    model: ResearchModel,
+    settings: Settings,
+    query: EvaluationQuery,
+    corpus: EvaluationCorpusIndex,
+    threshold: float,
+) -> tuple[AgentRunEvaluation, AgentRunEvaluation]:
+    """Share the identical first retrieval and assessment across both variants."""
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": f"paired-{corpus.dataset_sha256[:12]}-{query.query_id}"
+        }
+    }
+    model.drain_usage()
+    started = perf_counter()
+    expected_document_id = (
+        corpus.logical_to_backend_document_id[query.document_id]
+        if query.document_id is not None
+        else None
+    )
+    prefix = cast(
+        ResearchQueryState,
+        await graph.ainvoke(
+            {
+                "knowledge_base": corpus.collection_id,
+                "expected_document_id": expected_document_id,
+                "question": query.text,
+            },
+            config,
+        ),
+    )
+    prefix_latency_ms = (perf_counter() - started) * 1000
+    prefix_usage = model.drain_usage()
+    snapshot = await graph.aget_state(config)
+
+    if prefix.get("status") == ResearchStatus.FAILED or not snapshot.next:
+        run = _evaluate_result(
+            result=prefix,
+            usage=prefix_usage,
+            latency_ms=prefix_latency_ms,
+            query=query,
+            corpus=corpus,
+            threshold=threshold,
+        )
+        return run.model_copy(deep=True), run
+
+    assessment = prefix.get("assessment")
+    if assessment is not None and assessment.sufficient:
+        final, suffix_usage, suffix_latency_ms = await _resume_to_terminal(
+            graph=graph,
+            model=model,
+            config=config,
+            initial=prefix,
+            max_resumes=2,
+        )
+        run = _evaluate_result(
+            result=final,
+            usage=[*prefix_usage, *suffix_usage],
+            latency_ms=prefix_latency_ms + suffix_latency_ms,
+            query=query,
+            corpus=corpus,
+            threshold=threshold,
+        )
+        return run.model_copy(deep=True), run
+
+    baseline_state = cast(ResearchQueryState, dict(prefix))
+    baseline_state["status"] = ResearchStatus.INSUFFICIENT_EVIDENCE
+    baseline_state["stop_reason"] = ResearchStopReason.BUDGET_EXHAUSTED
+    baseline_state.pop("answer", None)
+    baseline = _evaluate_result(
+        result=baseline_state,
+        usage=prefix_usage,
+        latency_ms=prefix_latency_ms,
+        query=query,
+        corpus=corpus,
+        threshold=threshold,
+    )
+    final, continuation_usage, continuation_latency_ms = await _resume_to_terminal(
+        graph=graph,
+        model=model,
+        config=config,
+        initial=prefix,
+        max_resumes=settings.research_max_rewrites + 2,
+    )
+    agent = _evaluate_result(
+        result=final,
+        usage=[*prefix_usage, *continuation_usage],
+        latency_ms=prefix_latency_ms + continuation_latency_ms,
+        query=query,
+        corpus=corpus,
+        threshold=threshold,
+    )
+    return baseline, agent
 
 
 def _mean_optional(values: list[float | None]) -> float | None:
@@ -223,6 +376,10 @@ def _aggregate(
         failure_rate=statistics.fmean(
             run.status == ResearchStatus.FAILED.value for run in runs
         ),
+        stagnant_stop_rate=statistics.fmean(
+            run.stop_reason == ResearchStopReason.STAGNANT_RETRIEVAL.value
+            for run in runs
+        ),
         average_retrieval_calls=statistics.fmean(run.retrieval_calls for run in runs),
         average_rewrites=statistics.fmean(run.rewrite_count for run in runs),
         average_model_calls=statistics.fmean(run.model_calls for run in runs),
@@ -239,18 +396,15 @@ async def evaluate_research_agent(
     dataset: RetrievalDataset,
     *,
     backend: RetrievalBackend,
-    baseline_model: ResearchModel,
-    agent_model: ResearchModel,
+    model: ResearchModel,
     settings: Settings,
     work_dir: Path,
     index_profile: str,
     evidence_token_coverage_threshold: float = 0.6,
 ) -> AgentEvaluationReport:
-    """Compare zero-rewrite and bounded-rewrite versions of the same graph."""
+    """Compare zero versus bounded rewrites with a shared deterministic prefix."""
     if settings.research_max_rewrites < 1:
         raise ValueError("Agent evaluation requires research_max_rewrites >= 1")
-    if baseline_model.name != agent_model.name:
-        raise ValueError("Baseline and Agent must use the same model")
     if not 0.0 <= evidence_token_coverage_threshold <= 1.0:
         raise ValueError("evidence_token_coverage_threshold must be between 0 and 1")
 
@@ -261,30 +415,20 @@ async def evaluate_research_agent(
         work_dir=work_dir,
         index_profile=index_profile,
     )
-    baseline_settings = settings.model_copy(update={"research_max_rewrites": 0})
-    baseline_graph = build_research_graph(
+    graph = build_research_graph(
         retrieval=backend,
-        model=baseline_model,
-        settings=baseline_settings,
-    )
-    agent_graph = build_research_graph(
-        retrieval=backend,
-        model=agent_model,
+        model=model,
         settings=settings,
+        checkpointer=_evaluation_checkpointer(),
+        interrupt_after=["assess_evidence"],
     )
 
     comparisons: list[AgentQueryComparison] = []
     for query in dataset.queries:
-        baseline = await _run_query(
-            graph=baseline_graph,
-            model=baseline_model,
-            query=query,
-            corpus=corpus,
-            threshold=evidence_token_coverage_threshold,
-        )
-        agent = await _run_query(
-            graph=agent_graph,
-            model=agent_model,
+        baseline, agent = await _run_paired_query(
+            graph=graph,
+            model=model,
+            settings=settings,
             query=query,
             corpus=corpus,
             threshold=evidence_token_coverage_threshold,
@@ -313,6 +457,16 @@ async def evaluate_research_agent(
         and baseline_metrics.total_tokens is not None
         else None
     )
+    baseline_misses = [
+        comparison
+        for comparison in comparisons
+        if comparison.answerable
+        and comparison.baseline.status != ResearchStatus.COMPLETED.value
+    ]
+    recovered = sum(
+        comparison.agent.status == ResearchStatus.COMPLETED.value
+        for comparison in baseline_misses
+    )
     return AgentEvaluationReport(
         dataset_name=dataset.name,
         dataset_version=dataset.version,
@@ -321,7 +475,8 @@ async def evaluate_research_agent(
         split=dataset.split,
         backend=backend.name,
         index_profile=index_profile,
-        model=agent_model.name,
+        model=model.name,
+        comparison_protocol="shared_initial_retrieval_and_assessment_v1",
         document_count=len(dataset.documents),
         query_count=len(dataset.queries),
         answerable_query_count=sum(query.answerable for query in dataset.queries),
@@ -351,12 +506,23 @@ async def evaluate_research_agent(
                 agent_metrics.latency_p50_ms - baseline_metrics.latency_p50_ms
             ),
             total_tokens=token_delta,
+            baseline_missed_answerable=len(baseline_misses),
+            recovered_answerable=recovered,
+            answerable_recovery_rate=(
+                recovered / len(baseline_misses) if baseline_misses else None
+            ),
+            incremental_tokens_per_recovery=(
+                token_delta / recovered
+                if token_delta is not None and recovered > 0
+                else None
+            ),
         ),
         queries=comparisons,
         limitations=[
             "Evidence recall is cumulative across retrieval rounds, not Recall@K.",
             "Citation metrics measure overlap with labelled evidence, not semantic answer correctness.",
             "Token totals are null when the model provider omits usage telemetry.",
+            "Both variants share the initial retrieval and assessment to remove duplicate-call sampling noise.",
         ],
     )
 

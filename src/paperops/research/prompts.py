@@ -8,8 +8,10 @@ from typing import Any
 ASSESS_EVIDENCE = (
     "Judge whether the supplied evidence directly answers every material part of "
     "the question. Mark insufficient when claims would require outside knowledge. "
-    "Return the data fields sufficient, confidence, rationale, and missing_aspects "
-    "directly at the root of the JSON object."
+    "Select only the minimal directly relevant evidence IDs; do not select a chunk "
+    "merely because it is topically related. Return sufficient, confidence, "
+    "rationale, missing_aspects, and relevant_citation_ids directly at the root of "
+    "the JSON object."
 )
 REWRITE_QUERY = (
     "Write one concise retrieval query targeting the missing aspects. Do not "

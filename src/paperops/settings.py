@@ -66,13 +66,15 @@ class Settings(BaseSettings):
     research_model_proxy_url: str = ""
     research_model_timeout_seconds: float = Field(default=90.0, gt=0.0)
     research_search_top_k: int = Field(default=10, ge=1, le=100)
-    research_max_rewrites: int = Field(default=2, ge=0, le=5)
+    research_max_rewrites: int = Field(default=0, ge=0, le=5)
     research_min_evidence_hits: int = Field(default=1, ge=1, le=20)
     research_min_assessment_confidence: float = Field(
         default=0.65,
         ge=0.0,
         le=1.0,
     )
+    research_max_selected_evidence: int = Field(default=5, ge=1, le=10)
+    research_stop_on_stagnant_retrieval: bool = True
     research_max_chunk_chars: int = Field(default=1600, ge=200, le=10000)
     research_max_evidence_chars: int = Field(default=16000, ge=1000, le=100000)
 

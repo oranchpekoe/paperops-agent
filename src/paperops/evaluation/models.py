@@ -65,6 +65,7 @@ class EvaluationQuery(BaseModel):
 
     query_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    document_id: str | None = None
     answerable: bool = True
     evidence: list[EvidenceReference] = Field(default_factory=list)
 
@@ -101,6 +102,14 @@ class RetrievalDataset(BaseModel):
             raise ValueError("query_id values must be unique")
         known_documents = set(document_ids)
         for query in self.queries:
+            if (
+                query.document_id is not None
+                and query.document_id not in known_documents
+            ):
+                raise ValueError(
+                    f"query {query.query_id} scopes to unknown document: "
+                    f"{query.document_id}"
+                )
             evidence_ids = [item.evidence_id for item in query.evidence]
             if len(evidence_ids) != len(set(evidence_ids)):
                 raise ValueError(
@@ -116,6 +125,17 @@ class RetrievalDataset(BaseModel):
                     f"query {query.query_id} references unknown documents: "
                     f"{sorted(unknown)}"
                 )
+            if query.document_id is not None:
+                outside_scope = {
+                    item.document_id
+                    for item in query.evidence
+                    if item.document_id != query.document_id
+                }
+                if outside_scope:
+                    raise ValueError(
+                        f"query {query.query_id} contains evidence outside its "
+                        f"document scope: {sorted(outside_scope)}"
+                    )
         return self
 
 
@@ -183,6 +203,7 @@ class AgentRunEvaluation(BaseModel):
     citation_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     matched_evidence_ids: list[str] = Field(default_factory=list)
     retrieval_calls: int = Field(ge=0)
+    new_evidence_count: int = Field(ge=0)
     rewrite_count: int = Field(ge=0)
     model_calls: int = Field(ge=0)
     attempted_queries: list[str] = Field(default_factory=list)
@@ -190,7 +211,14 @@ class AgentRunEvaluation(BaseModel):
     completion_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     model_latency_ms: float = Field(default=0.0, ge=0.0)
+    assessment_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    assessment_rationale: str | None = None
+    selected_citation_ids: list[str] = Field(default_factory=list)
+    answer_text: str | None = None
+    answer_citation_ids: list[str] = Field(default_factory=list)
     failure_code: str | None = None
+    failure_message: str | None = None
+    stop_reason: str | None = None
 
 
 class AgentQueryComparison(BaseModel):
@@ -213,6 +241,7 @@ class AgentVariantMetrics(BaseModel):
     citation_precision: float | None = Field(default=None, ge=0.0, le=1.0)
     citation_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     failure_rate: float = Field(ge=0.0, le=1.0)
+    stagnant_stop_rate: float = Field(ge=0.0, le=1.0)
     average_retrieval_calls: float = Field(ge=0.0)
     average_rewrites: float = Field(ge=0.0)
     average_model_calls: float = Field(ge=0.0)
@@ -234,6 +263,10 @@ class AgentMetricDelta(BaseModel):
     average_model_calls: float
     latency_p50_ms: float
     total_tokens: int | None = None
+    baseline_missed_answerable: int = Field(ge=0)
+    recovered_answerable: int = Field(ge=0)
+    answerable_recovery_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    incremental_tokens_per_recovery: float | None = None
 
 
 class AgentEvaluationReport(BaseModel):
@@ -247,6 +280,7 @@ class AgentEvaluationReport(BaseModel):
     backend: str = Field(min_length=1)
     index_profile: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    comparison_protocol: str = Field(min_length=1)
     document_count: int = Field(ge=1)
     query_count: int = Field(ge=1)
     answerable_query_count: int = Field(ge=0)

@@ -40,7 +40,7 @@ def build_research_graph(
     def route_after_retrieve(
         state: ResearchQueryState,
     ) -> Literal["assess", "end"]:
-        return "end" if state.get("status") == ResearchStatus.FAILED else "assess"
+        return "assess" if state.get("status") == ResearchStatus.ASSESSING else "end"
 
     def route_after_assess(
         state: ResearchQueryState,
