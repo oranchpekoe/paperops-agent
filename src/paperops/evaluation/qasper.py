@@ -125,12 +125,51 @@ def _evidence_counts(raw_answers: object, document_text: str) -> Counter[str]:
     return evidence_counts
 
 
+def _unanimously_unanswerable(raw_answers: object) -> bool:
+    """Accept a refusal label only when every valid annotation agrees."""
+    if not isinstance(raw_answers, list):
+        return False
+    answers = [
+        answer
+        for annotation in raw_answers
+        if (answer := _answer_payload(annotation)) is not None
+    ]
+    return bool(answers) and all(
+        answer.get("unanswerable") is True for answer in answers
+    )
+
+
+def _selection_complete(
+    *,
+    total: int,
+    answerable: int,
+    unanswerable: int,
+    max_queries: int | None,
+    max_answerable_queries: int | None,
+    max_unanswerable_queries: int | None,
+) -> bool:
+    if max_queries is not None and total >= max_queries:
+        return True
+    quota_checks = [
+        count >= limit
+        for count, limit in (
+            (answerable, max_answerable_queries),
+            (unanswerable, max_unanswerable_queries),
+        )
+        if limit is not None
+    ]
+    return bool(quota_checks) and all(quota_checks)
+
+
 def convert_qasper(
     source: Path,
     *,
     split: str,
     max_documents: int | None = None,
     max_queries: int | None = None,
+    max_answerable_queries: int | None = None,
+    max_unanswerable_queries: int | None = None,
+    include_unanswerable: bool = False,
 ) -> RetrievalDataset:
     """Convert one downloaded QASPER split without fetching data implicitly."""
     payload = json.loads(source.read_text(encoding="utf-8"))
@@ -147,10 +186,19 @@ def convert_qasper(
 
     documents: list[EvaluationDocument] = []
     queries: list[EvaluationQuery] = []
+    answerable_count = 0
+    unanswerable_count = 0
     for paper_index, (raw_paper_id, raw_paper) in enumerate(papers, start=1):
         if max_documents is not None and len(documents) >= max_documents:
             break
-        if max_queries is not None and len(queries) >= max_queries:
+        if _selection_complete(
+            total=len(queries),
+            answerable=answerable_count,
+            unanswerable=unanswerable_count,
+            max_queries=max_queries,
+            max_answerable_queries=max_answerable_queries,
+            max_unanswerable_queries=max_unanswerable_queries,
+        ):
             break
         if not isinstance(raw_paper, dict):
             continue
@@ -170,9 +218,13 @@ def convert_qasper(
             _qas(raw_paper.get("qas")),
             start=1,
         ):
-            if (
-                max_queries is not None
-                and len(queries) + len(paper_queries) >= max_queries
+            if _selection_complete(
+                total=len(queries) + len(paper_queries),
+                answerable=answerable_count,
+                unanswerable=unanswerable_count,
+                max_queries=max_queries,
+                max_answerable_queries=max_answerable_queries,
+                max_unanswerable_queries=max_unanswerable_queries,
             ):
                 break
             question = _text(raw_query.get("question"))
@@ -194,7 +246,10 @@ def convert_qasper(
                 )
                 for text, count in sorted(counts.items())
             ]
-            if evidence:
+            if evidence and (
+                max_answerable_queries is None
+                or answerable_count < max_answerable_queries
+            ):
                 paper_queries.append(
                     EvaluationQuery(
                         query_id=query_id,
@@ -202,15 +257,36 @@ def convert_qasper(
                         evidence=evidence,
                     )
                 )
+                answerable_count += 1
+            elif (
+                include_unanswerable
+                and _unanimously_unanswerable(raw_query.get("answers"))
+                and (
+                    max_unanswerable_queries is None
+                    or unanswerable_count < max_unanswerable_queries
+                )
+            ):
+                paper_queries.append(
+                    EvaluationQuery(
+                        query_id=query_id,
+                        text=question,
+                        answerable=False,
+                    )
+                )
+                unanswerable_count += 1
         if paper_queries:
             documents.append(document)
             queries.extend(paper_queries)
 
     if not documents or not queries:
-        raise ValueError("No answerable text-evidence queries were found in the input")
+        raise ValueError("No eligible labelled queries were found in the input")
     return RetrievalDataset(
         name="qasper",
-        version="0.3-paperops-v1",
+        version=(
+            "0.3-paperops-v2-with-unanswerable"
+            if include_unanswerable
+            else "0.3-paperops-v1"
+        ),
         kind=DatasetKind.BENCHMARK,
         split=split,
         source_url=QASPER_SOURCE_URL,

@@ -8,6 +8,7 @@ import math
 import re
 import statistics
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 
@@ -63,19 +64,21 @@ def evidence_token_coverage(evidence: str, chunk: str) -> float:
     return overlap / sum(evidence_tokens.values())
 
 
-def _matches(
-    hit: SearchHit,
+def matches_evidence(
+    *,
+    content: str,
     logical_document_id: str | None,
     evidence: EvidenceReference,
     threshold: float,
 ) -> bool:
+    """Match one retrieved passage to one labelled evidence unit."""
     if logical_document_id != evidence.document_id:
         return False
     normalized_evidence = " ".join(evidence.text.lower().split())
-    normalized_chunk = " ".join(hit.content.lower().split())
+    normalized_chunk = " ".join(content.lower().split())
     if normalized_evidence in normalized_chunk:
         return True
-    return evidence_token_coverage(evidence.text, hit.content) >= threshold
+    return evidence_token_coverage(evidence.text, content) >= threshold
 
 
 def _discounted_cumulative_gain(grades: list[int], limit: int) -> float:
@@ -102,7 +105,12 @@ def _evaluate_query(
         matched = {
             evidence.evidence_id
             for evidence in query.evidence
-            if _matches(hit, logical_document_id, evidence, threshold)
+            if matches_evidence(
+                content=hit.content,
+                logical_document_id=logical_document_id,
+                evidence=evidence,
+                threshold=threshold,
+            )
         }
         matches_by_rank.append(matched)
         ranked_hits.append(
@@ -157,11 +165,12 @@ def _evaluate_query(
     )
 
 
-def _percentile(values: list[float], percentile: float) -> float:
+def percentile(values: list[float], quantile: float) -> float:
+    """Interpolate one quantile from a non-empty numeric sample."""
     if len(values) == 1:
         return values[0]
     ordered = sorted(values)
-    position = (len(ordered) - 1) * percentile
+    position = (len(ordered) - 1) * quantile
     lower = math.floor(position)
     upper = math.ceil(position)
     if lower == upper:
@@ -189,12 +198,13 @@ def _aggregate(
             )
             for limit in top_k
         },
-        latency_p50_ms=_percentile(latencies, 0.50),
-        latency_p95_ms=_percentile(latencies, 0.95),
+        latency_p50_ms=percentile(latencies, 0.50),
+        latency_p95_ms=percentile(latencies, 0.95),
     )
 
 
-def _dataset_sha256(dataset: RetrievalDataset) -> str:
+def dataset_sha256(dataset: RetrievalDataset) -> str:
+    """Hash the canonical validated dataset representation."""
     canonical = json.dumps(
         dataset.model_dump(mode="json"),
         ensure_ascii=False,
@@ -202,6 +212,16 @@ def _dataset_sha256(dataset: RetrievalDataset) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationCorpusIndex:
+    """Identity and document-id mapping shared by offline evaluators."""
+
+    collection_id: str
+    dataset_sha256: str
+    backend_to_logical_document_id: dict[str, str]
+    indexing_latency_ms: float
 
 
 def _collection_id(
@@ -242,8 +262,72 @@ async def evaluate_retrieval_backend(
     if not 0.0 <= evidence_token_coverage_threshold <= 1.0:
         raise ValueError("evidence_token_coverage_threshold must be between 0 and 1")
 
-    dataset_sha256 = _dataset_sha256(dataset)
-    collection = _collection_id(dataset, dataset_sha256, settings, index_profile)
+    corpus = await index_evaluation_corpus(
+        dataset,
+        backend=backend,
+        settings=settings,
+        work_dir=work_dir,
+        index_profile=index_profile,
+    )
+
+    query_reports: list[QueryEvaluation] = []
+    for query in dataset.queries:
+        if not query.answerable:
+            continue
+        query_started = perf_counter()
+        hits = await backend.search(
+            SearchRequest(
+                knowledge_base=corpus.collection_id,
+                query=query.text,
+                top_k=limits[-1],
+            )
+        )
+        latency_ms = (perf_counter() - query_started) * 1000
+        query_reports.append(
+            _evaluate_query(
+                query,
+                hits,
+                corpus.backend_to_logical_document_id,
+                limits,
+                evidence_token_coverage_threshold,
+                latency_ms,
+            )
+        )
+
+    if not query_reports:
+        raise ValueError("retrieval evaluation requires answerable queries")
+
+    return RetrievalEvaluationReport(
+        dataset_name=dataset.name,
+        dataset_version=dataset.version,
+        dataset_sha256=corpus.dataset_sha256,
+        dataset_kind=dataset.kind,
+        split=dataset.split,
+        backend=backend.name,
+        index_profile=index_profile,
+        document_count=len(dataset.documents),
+        query_count=len(query_reports),
+        top_k=list(limits),
+        chunk_size_chars=settings.native_chunk_size_chars,
+        chunk_overlap_chars=settings.native_chunk_overlap_chars,
+        evidence_token_coverage_threshold=evidence_token_coverage_threshold,
+        indexing_latency_ms=corpus.indexing_latency_ms,
+        aggregate=_aggregate(query_reports, limits),
+        queries=query_reports,
+    )
+
+
+async def index_evaluation_corpus(
+    dataset: RetrievalDataset,
+    *,
+    backend: RetrievalBackend,
+    settings: Settings,
+    work_dir: Path,
+    index_profile: str,
+) -> EvaluationCorpusIndex:
+    """Index a labelled corpus once for retrieval and Agent evaluations."""
+    fingerprint = dataset_sha256(dataset)
+    collection = _collection_id(dataset, fingerprint, settings, index_profile)
     corpus_dir = work_dir / "corpus"
     corpus_dir.mkdir(parents=True, exist_ok=True)
     backend_to_logical_document_id: dict[str, str] = {}
@@ -262,7 +346,7 @@ async def evaluate_retrieval_backend(
                 markdown_path=str(markdown_path),
                 idempotency_key=(
                     f"evaluation:{dataset.name}:{dataset.version}:"
-                    f"{dataset.split}:{dataset_sha256}:"
+                    f"{dataset.split}:{fingerprint}:"
                     f"{settings.native_chunk_size_chars}:"
                     f"{settings.native_chunk_overlap_chars}:"
                     f"{index_profile}:"
@@ -272,46 +356,11 @@ async def evaluate_retrieval_backend(
         )
         backend_to_logical_document_id[result.document_id] = document.document_id
     indexing_latency_ms = (perf_counter() - indexing_started) * 1000
-
-    query_reports: list[QueryEvaluation] = []
-    for query in dataset.queries:
-        query_started = perf_counter()
-        hits = await backend.search(
-            SearchRequest(
-                knowledge_base=collection,
-                query=query.text,
-                top_k=limits[-1],
-            )
-        )
-        latency_ms = (perf_counter() - query_started) * 1000
-        query_reports.append(
-            _evaluate_query(
-                query,
-                hits,
-                backend_to_logical_document_id,
-                limits,
-                evidence_token_coverage_threshold,
-                latency_ms,
-            )
-        )
-
-    return RetrievalEvaluationReport(
-        dataset_name=dataset.name,
-        dataset_version=dataset.version,
-        dataset_sha256=dataset_sha256,
-        dataset_kind=dataset.kind,
-        split=dataset.split,
-        backend=backend.name,
-        index_profile=index_profile,
-        document_count=len(dataset.documents),
-        query_count=len(dataset.queries),
-        top_k=list(limits),
-        chunk_size_chars=settings.native_chunk_size_chars,
-        chunk_overlap_chars=settings.native_chunk_overlap_chars,
-        evidence_token_coverage_threshold=evidence_token_coverage_threshold,
+    return EvaluationCorpusIndex(
+        collection_id=collection,
+        dataset_sha256=fingerprint,
+        backend_to_logical_document_id=backend_to_logical_document_id,
         indexing_latency_ms=indexing_latency_ms,
-        aggregate=_aggregate(query_reports, limits),
-        queries=query_reports,
     )
 
 

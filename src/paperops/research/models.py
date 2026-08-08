@@ -114,3 +114,14 @@ class ResearchEvent(BaseModel):
     status: ResearchStatus
     message: str = Field(min_length=1)
     retrieval_round: int | None = Field(default=None, ge=1)
+
+
+class ModelCallUsage(BaseModel):
+    """Provider telemetry for one attempted semantic-model call."""
+
+    operation: str = Field(min_length=1)
+    success: bool
+    latency_ms: float = Field(ge=0.0)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)

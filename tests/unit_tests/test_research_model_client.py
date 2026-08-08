@@ -55,6 +55,11 @@ async def test_adapter_keeps_user_payload_out_of_system_prompt() -> None:
         return httpx.Response(
             200,
             json={
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "total_tokens": 150,
+                },
                 "choices": [
                     {
                         "message": {
@@ -68,7 +73,7 @@ async def test_adapter_keeps_user_payload_out_of_system_prompt() -> None:
                             )
                         }
                     }
-                ]
+                ],
             },
         )
 
@@ -90,6 +95,11 @@ async def test_adapter_keeps_user_payload_out_of_system_prompt() -> None:
     assert payload["response_format"] == {"type": "json_object"}
     assert captured["authorization"] == "Bearer test-only-key"
     assert result.sufficient is True
+    usage = client.drain_usage()
+    assert len(usage) == 1
+    assert usage[0].operation == "assess_evidence"
+    assert usage[0].success is True
+    assert usage[0].total_tokens == 150
 
 
 @pytest.mark.asyncio
