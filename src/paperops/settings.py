@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     research_model_proxy_url: str = ""
     research_model_timeout_seconds: float = Field(default=90.0, gt=0.0)
     research_search_top_k: int = Field(default=10, ge=1, le=100)
-    research_max_rewrites: int = Field(default=2, ge=0, le=5)
+    research_max_rewrites: int = Field(default=0, ge=0, le=5)
     research_min_evidence_hits: int = Field(default=1, ge=1, le=20)
     research_min_assessment_confidence: float = Field(
         default=0.65,

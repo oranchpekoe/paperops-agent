@@ -272,7 +272,7 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 | `PAPEROPS_RESEARCH_MODEL_MODE` | `fake` | `fake` 或 `openai_compatible` 语义模型适配器 |
 | `PAPEROPS_RESEARCH_MODEL_PROXY_URL` | 空 | 仅供研究模型 HTTP 客户端使用的可选代理地址 |
 | `PAPEROPS_RESEARCH_SEARCH_TOP_K` | `10` | 每轮调研查询的候选 Chunk 上限 |
-| `PAPEROPS_RESEARCH_MAX_REWRITES` | `2` | 证据不足时允许的查询改写次数 |
+| `PAPEROPS_RESEARCH_MAX_REWRITES` | `0` | 证据不足时允许的查询改写次数；实验评测可显式设为 `2` |
 | `PAPEROPS_RESEARCH_MIN_ASSESSMENT_CONFIDENCE` | `0.65` | 允许进入回答节点的最低充分度置信度 |
 | `PAPEROPS_RESEARCH_MAX_SELECTED_EVIDENCE` | `5` | 回答模型可接收的相关证据数量上限 |
 | `PAPEROPS_RESEARCH_STOP_ON_STAGNANT_RETRIEVAL` | `true` | 改写后没有新增证据时是否提前停止 |

@@ -31,4 +31,5 @@ def test_settings_have_safe_local_defaults() -> None:
     assert settings.artifacts_dir.name == "artifacts"
     assert settings.knowledge_dir.name == "knowledge"
     assert settings.max_parse_attempts == 2
+    assert settings.research_max_rewrites == 0
     assert JobStatus.PENDING == "pending"
