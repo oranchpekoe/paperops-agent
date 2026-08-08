@@ -68,6 +68,7 @@
     {
       "query_id": "q-reward-safety",
       "text": "Which penalties keep the UAV team away from collisions and the operating boundary?",
+      "document_id": "uav-encirclement",
       "evidence": [
         {
           "evidence_id": "ev-reward",
@@ -80,6 +81,7 @@
     {
       "query_id": "q-decentralized-execution",
       "text": "How can each aircraft act alone after learning from global information?",
+      "document_id": "uav-encirclement",
       "evidence": [
         {
           "evidence_id": "ev-training",
@@ -92,6 +94,7 @@
     {
       "query_id": "q-dehazing-variables",
       "text": "Which physical quantities are estimated before scene radiance is recovered?",
+      "document_id": "image-dehazing",
       "evidence": [
         {
           "evidence_id": "ev-atmospheric-model",
@@ -104,6 +107,7 @@
     {
       "query_id": "q-battery-reserve",
       "text": "What minimum battery reserve is required after the drone returns to charge?",
+      "document_id": "drone-energy",
       "evidence": [
         {
           "evidence_id": "ev-energy-policy",
@@ -116,6 +120,7 @@
     {
       "query_id": "q-flight-postponement",
       "text": "Under what weather or landing conditions is an inspection flight delayed?",
+      "document_id": "drone-energy",
       "evidence": [
         {
           "evidence_id": "ev-flight-safety",

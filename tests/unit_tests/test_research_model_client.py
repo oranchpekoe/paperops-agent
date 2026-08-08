@@ -69,6 +69,7 @@ async def test_adapter_keeps_user_payload_out_of_system_prompt() -> None:
                                     "confidence": 0.91,
                                     "rationale": "The evidence answers the question.",
                                     "missing_aspects": [],
+                                    "relevant_citation_ids": ["E1"],
                                 }
                             )
                         }

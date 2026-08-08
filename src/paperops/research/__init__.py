@@ -13,6 +13,7 @@ from paperops.research.models import (
     ResearchFailure,
     ResearchFailureCode,
     ResearchStatus,
+    ResearchStopReason,
 )
 from paperops.research.protocols import ResearchModel
 
@@ -29,5 +30,6 @@ __all__ = [
     "ResearchFailureCode",
     "ResearchModel",
     "ResearchStatus",
+    "ResearchStopReason",
     "build_research_graph",
 ]

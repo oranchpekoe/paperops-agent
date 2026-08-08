@@ -67,6 +67,9 @@ class FakeResearchModel:
             confidence=1.0,
             rationale="Deterministic fake evidence-count policy.",
             missing_aspects=[] if sufficient else ["additional supporting evidence"],
+            relevant_citation_ids=(
+                [request.evidence[0].citation_id] if sufficient else []
+            ),
         )
         self._record_usage("assess_evidence", success=True)
         return result

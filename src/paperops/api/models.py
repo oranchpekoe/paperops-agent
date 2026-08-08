@@ -20,6 +20,7 @@ from paperops.research.models import (
     ResearchEvent,
     ResearchFailure,
     ResearchStatus,
+    ResearchStopReason,
 )
 
 
@@ -105,6 +106,7 @@ class ResearchQueryView(BaseModel):
     retrieval_round: int = 0
     rewrite_count: int = 0
     retrieval_calls: int = 0
+    new_evidence_count: int = 0
     model_calls: int = 0
     attempted_queries: list[str] = Field(default_factory=list)
     evidence: list[EvidenceCitation] = Field(default_factory=list)
@@ -112,5 +114,6 @@ class ResearchQueryView(BaseModel):
     last_rewrite: QueryRewrite | None = None
     answer: ResearchAnswer | None = None
     failure: ResearchFailure | None = None
+    stop_reason: ResearchStopReason | None = None
     events: list[ResearchEvent] = Field(default_factory=list)
     runtime_error: str | None = None

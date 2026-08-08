@@ -123,6 +123,12 @@ def _parser() -> argparse.ArgumentParser:
     agent.add_argument("--max-rewrites", type=_positive_integer, default=2)
     agent.add_argument("--min-evidence-hits", type=_positive_integer, default=1)
     agent.add_argument("--min-confidence", type=float, default=0.65)
+    agent.add_argument(
+        "--query-id",
+        action="append",
+        default=[],
+        help="evaluate only this query id; repeat to select multiple queries",
+    )
     _add_backend_arguments(agent)
     return parser
 
@@ -205,6 +211,14 @@ def _build_research_model(settings: Settings) -> ResearchModel:
 
 async def _evaluate_agent(args: argparse.Namespace) -> int:
     dataset = load_retrieval_dataset(args.dataset)
+    if args.query_id:
+        requested = set(args.query_id)
+        selected = [query for query in dataset.queries if query.query_id in requested]
+        found = {query.query_id for query in selected}
+        unknown = requested - found
+        if unknown:
+            raise ValueError(f"Unknown query ids: {sorted(unknown)}")
+        dataset = dataset.model_copy(update={"queries": selected})
     if dataset.kind == DatasetKind.SMOKE_FIXTURE:
         print(
             "warning: smoke_fixture and fake model runs validate wiring only; "
@@ -223,23 +237,20 @@ async def _evaluate_agent(args: argparse.Namespace) -> int:
         research_min_assessment_confidence=args.min_confidence,
     )
     backend, index_profile = _build_backend(args, settings)
-    baseline_model = _build_research_model(settings)
-    agent_model = _build_research_model(settings)
+    model = _build_research_model(settings)
     try:
         report = await evaluate_research_agent(
             dataset,
             backend=backend,
-            baseline_model=baseline_model,
-            agent_model=agent_model,
+            model=model,
             settings=settings,
             work_dir=work_dir,
             index_profile=index_profile,
             evidence_token_coverage_threshold=args.evidence_coverage,
         )
     finally:
-        for model in (baseline_model, agent_model):
-            if isinstance(model, OpenAICompatibleResearchModel):
-                await model.aclose()
+        if isinstance(model, OpenAICompatibleResearchModel):
+            await model.aclose()
     write_agent_evaluation_report(report, args.output)
     print(agent_report_summary(report))
     return 0

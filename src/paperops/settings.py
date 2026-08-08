@@ -73,6 +73,8 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
     )
+    research_max_selected_evidence: int = Field(default=5, ge=1, le=10)
+    research_stop_on_stagnant_retrieval: bool = True
     research_max_chunk_chars: int = Field(default=1600, ge=200, le=10000)
     research_max_evidence_chars: int = Field(default=16000, ge=1000, le=100000)
 

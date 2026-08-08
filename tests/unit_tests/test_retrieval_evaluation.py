@@ -124,6 +124,7 @@ def test_qasper_converter_keeps_answerable_text_evidence(tmp_path: Path) -> None
     assert dataset.kind == DatasetKind.BENCHMARK
     assert len(dataset.documents) == 1
     assert len(dataset.queries) == 1
+    assert dataset.queries[0].document_id == "paper-1"
     assert dataset.queries[0].evidence[0].relevance == 2
     assert len(refusal_dataset.queries) == 2
     assert refusal_dataset.queries[1].answerable is False

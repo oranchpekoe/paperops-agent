@@ -254,6 +254,7 @@ def convert_qasper(
                     EvaluationQuery(
                         query_id=query_id,
                         text=question,
+                        document_id=document_id,
                         evidence=evidence,
                     )
                 )
@@ -270,6 +271,7 @@ def convert_qasper(
                     EvaluationQuery(
                         query_id=query_id,
                         text=question,
+                        document_id=document_id,
                         answerable=False,
                     )
                 )
@@ -283,9 +285,9 @@ def convert_qasper(
     return RetrievalDataset(
         name="qasper",
         version=(
-            "0.3-paperops-v2-with-unanswerable"
+            "0.3-paperops-v3-document-scoped-with-unanswerable"
             if include_unanswerable
-            else "0.3-paperops-v1"
+            else "0.3-paperops-v3-document-scoped"
         ),
         kind=DatasetKind.BENCHMARK,
         split=split,

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, Field, model_validator
+
+CitationId = Annotated[str, Field(pattern=r"^E[1-9][0-9]*$")]
 
 
 class ResearchStatus(StrEnum):
@@ -30,10 +33,18 @@ class ResearchFailureCode(StrEnum):
     CITATION_VALIDATION_ERROR = "citation_validation_error"
 
 
+class ResearchStopReason(StrEnum):
+    """Explain a safe insufficient-evidence termination."""
+
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    DUPLICATE_QUERY = "duplicate_query"
+    STAGNANT_RETRIEVAL = "stagnant_retrieval"
+
+
 class EvidenceCitation(BaseModel):
     """One checkpointed retrieval chunk with a stable local citation id."""
 
-    citation_id: str = Field(pattern=r"^E[1-9][0-9]*$")
+    citation_id: CitationId
     document_id: str = Field(min_length=1)
     chunk_id: str = Field(min_length=1)
     content: str = Field(min_length=1)
@@ -58,6 +69,7 @@ class EvidenceAssessment(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(min_length=1)
     missing_aspects: list[str] = Field(default_factory=list, max_length=5)
+    relevant_citation_ids: list[CitationId] = Field(max_length=10)
 
     @model_validator(mode="after")
     def require_missing_aspect_for_insufficient_evidence(self) -> EvidenceAssessment:
@@ -66,6 +78,10 @@ class EvidenceAssessment(BaseModel):
             raise ValueError(
                 "insufficient evidence requires at least one missing aspect"
             )
+        if self.sufficient and not self.relevant_citation_ids:
+            raise ValueError("sufficient evidence requires relevant citation ids")
+        if len(self.relevant_citation_ids) != len(set(self.relevant_citation_ids)):
+            raise ValueError("relevant citation ids must be unique")
         return self
 
 
