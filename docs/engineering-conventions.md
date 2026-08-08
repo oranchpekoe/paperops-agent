@@ -21,7 +21,7 @@
 - `SystemMessage` 只包含稳定的角色、目标、约束和输出规则。
 - 用户查询使用 `HumanMessage`；工具结果使用 `ToolMessage`；论文正文等外部内容作为明确标记的数据传入。
 - 不把用户查询、论文内容或工具返回值拼接到 System Prompt，避免不可信内容获得系统指令优先级。
-- Prompt 模板集中放在 `src/paperops/prompts.py`，节点负责组装状态与调用，不内嵌大段提示词。
+- Prompt 模板集中放在对应能力目录的 `prompts.py`，节点负责组装状态与调用，不内嵌大段提示词。
 
 ## 4. 工作流副作用
 

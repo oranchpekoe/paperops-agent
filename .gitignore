@@ -50,6 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 .pytest-tmp/
+.pytest-tmp*/
 cover/
 
 # Translations
@@ -180,6 +181,7 @@ paperops-index.db-wal
 .uv-cache/
 .paperops-eval/
 .paperops-models/
+.paperops-test/
 
 # Local assistant configuration
 .claude/settings.local.json

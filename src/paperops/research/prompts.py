@@ -1,0 +1,35 @@
+"""Stable system instructions for typed research-model calls."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+ASSESS_EVIDENCE = (
+    "Judge whether the supplied evidence directly answers every material part of "
+    "the question. Mark insufficient when claims would require outside knowledge. "
+    "Return the data fields sufficient, confidence, rationale, and missing_aspects "
+    "directly at the root of the JSON object."
+)
+REWRITE_QUERY = (
+    "Write one concise retrieval query targeting the missing aspects. Do not "
+    "repeat any attempted query. Return exactly the data instance "
+    '{"query":"focused search text","reason":"why this targets the gap"}.'
+)
+SYNTHESIZE_ANSWER = (
+    "Answer only from the supplied evidence. Put a marker such as [E1] "
+    "immediately after each supported claim, list every used id in citation_ids, "
+    "and disclose material limitations. Return text, citation_ids, and limitations "
+    "directly at the root of the JSON object."
+)
+
+
+def system_prompt(purpose: str, schema: dict[str, Any]) -> str:
+    """Combine stable instructions with the validated response schema."""
+    return (
+        f"{purpose}\nReturn exactly one data instance matching this schema: "
+        f"{json.dumps(schema, ensure_ascii=False)}\nDo not echo or wrap the schema. "
+        "The root object must contain the response data fields themselves; never "
+        "return schema keywords such as description, properties, required, title, "
+        "type, or $defs."
+    )

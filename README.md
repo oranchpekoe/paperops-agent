@@ -15,7 +15,8 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - PR1：完成产品边界、包结构、依赖和上游归属整理；
 - PR2：使用 Fake Parser/Retrieval Backend 跑通单文档状态机、重试、人工中断、checkpoint 恢复和幂等入库；
 - PR3：已接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
-- 当前 PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线。
+- PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线；
+- 当前 PR5：增加独立的论文调研 Query Graph，按证据充分度执行最多两轮查询改写与补检，校验 Chunk 引用，并在证据不足时拒答。
 
 > `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
@@ -23,7 +24,7 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 
 **用户**：需要批量整理科研论文的实验室学生或研究人员。
 
-**输入**：单篇科研 PDF；后续扩展为批次目录。
+**输入**：单篇科研 PDF，或面向已索引 Collection 的研究问题。
 
 **输出**：
 
@@ -31,6 +32,7 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - 原生索引文档 ID、Chunk 数量和标题路径；
 - 一条文档级探测问题及其检索证据；
 - 检索命中验收报告；
+- 带稳定 Chunk 引用的调研回答，或结构化的证据不足结果；
 - 失败原因、重试记录和人工审核记录。
 
 ## MVP 工作流
@@ -52,6 +54,23 @@ flowchart TD
 
 稳定步骤由普通代码执行。解析正文保存在 artifact 目录，LangGraph State 只保存路径、状态和结构化决策，避免大型文档反复进入 checkpoint。当前规则无法可靠判断时直接通过 LangGraph `interrupt()` 进入人工审核；是否增加 LLM 语义质检留给后续评测决定，而不是预设它一定有效。
 
+PR5 的调研查询使用第二张图，与入库状态机分离：
+
+```mermaid
+flowchart TD
+    A["用户问题"] --> B["检索证据"]
+    B --> C{"证据是否充分且置信度达标？"}
+    C -->|"是"| D["基于证据生成回答"]
+    D --> E{"引用 ID 是否都能解析？"}
+    E -->|"是"| F["返回回答与 Chunk 引用"]
+    E -->|"否"| G["失败关闭"]
+    C -->|"否且仍有预算"| H["针对缺口改写查询"]
+    H --> B
+    C -->|"否且预算耗尽"| I["拒答并保留审计轨迹"]
+```
+
+模型只负责证据判断、查询改写和回答生成三个有类型约束的语义动作。循环上限、低置信度门槛、证据去重、上下文字符预算、重复查询拦截和引用校验均由普通代码控制。
+
 ## 仓库结构
 
 ```text
@@ -72,6 +91,7 @@ src/paperops/
 │   ├── hybrid.py             # RRF 融合与有界重排
 │   └── providers.py          # 可替换的向量与重排模型协议
 ├── evaluation/               # QASPER 转换、证据标签与检索指标
+├── research/                 # PR5 Query Graph、模型协议、证据/引用与有界补检
 ├── quality/rules.py          # 确定性 Markdown 质量门
 ├── nodes/workflow.py         # 领域节点与人工 interrupt
 └── api/                      # FastAPI、线程运行器与人工审批/恢复
@@ -188,6 +208,20 @@ uv run paperops-eval evaluate \
 
 在固定的 QASPER dev 50 篇/148 问题诊断子集上，Dense 单路没有超过 BM25；Sparse + Dense RRF 将 Recall@10 从 0.382 提升至 0.429，交叉编码器重排进一步提升到 0.479，但带来明显 CPU 延迟。因此服务默认值保持 `native`，`dense`、`hybrid` 和 `hybrid_reranked` 必须显式选择。数据转换规则、完整指标、复现命令和限制见 [PR4 检索评测说明](docs/pr4-retrieval-evaluation.md)。
 
+## PR5 论文调研查询 API
+
+先通过 `/jobs` 将论文写入目标 Collection，再提交问题：
+
+```bash
+curl -X POST http://127.0.0.1:8080/queries \
+  -H "Content-Type: application/json" \
+  -d '{"knowledge_base":"uav-papers","question":"Which coordination policy is evaluated, and what limitations are reported?"}'
+
+curl http://127.0.0.1:8080/queries/<thread_id>
+```
+
+默认 `PAPEROPS_RESEARCH_MODEL_MODE=fake` 只用于离线接线测试。真实查询需选择支持 JSON mode 的 OpenAI-compatible chat-completions 服务，并在未跟踪的 `.env` 中设置模型地址、名称和 Key。实现边界、状态流转和验收命令见 [PR5 调研 Agent 说明](docs/pr5-research-agent.md)。
+
 ## 配置边界
 
 PaperOps 配置统一使用 `PAPEROPS_` 前缀：
@@ -211,6 +245,12 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 | `PAPEROPS_RETRIEVAL_CANDIDATE_K` | `20` | 融合和重排的一阶段候选上限 |
 | `PAPEROPS_RETRIEVAL_RRF_K` | `60` | Reciprocal Rank Fusion 平滑常数 |
 | `PAPEROPS_RETRIEVAL_PROBE_TOP_K` | `10` | 文档级索引探测的候选数量 |
+| `PAPEROPS_RESEARCH_MODEL_MODE` | `fake` | `fake` 或 `openai_compatible` 语义模型适配器 |
+| `PAPEROPS_RESEARCH_MODEL_PROXY_URL` | 空 | 仅供研究模型 HTTP 客户端使用的可选代理地址 |
+| `PAPEROPS_RESEARCH_SEARCH_TOP_K` | `10` | 每轮调研查询的候选 Chunk 上限 |
+| `PAPEROPS_RESEARCH_MAX_REWRITES` | `2` | 证据不足时允许的查询改写次数 |
+| `PAPEROPS_RESEARCH_MIN_ASSESSMENT_CONFIDENCE` | `0.65` | 允许进入回答节点的最低充分度置信度 |
+| `PAPEROPS_RESEARCH_MAX_EVIDENCE_CHARS` | `16000` | 写入单个查询 checkpoint 的证据字符总预算 |
 | `PAPEROPS_RAGFLOW_BASE_URL` | `http://localhost:9380` | 可选 RAGFlow 后端地址 |
 | `PAPEROPS_RAGFLOW_API_KEY` | 空 | 仅选择 RAGFlow 后端时必需 |
 | `PAPEROPS_MAX_PARSE_ATTEMPTS` | `2` | 单文档最大解析次数 |

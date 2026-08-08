@@ -21,6 +21,9 @@ from paperops.api.models import (
     HealthView,
     JobAccepted,
     JobView,
+    ResearchQueryAccepted,
+    ResearchQueryRequest,
+    ResearchQueryView,
     ResumeAccepted,
 )
 from paperops.api.runner import JobAlreadyRunningError, JobRunner
@@ -41,6 +44,20 @@ from paperops.models import (
     WorkflowEvent,
     WorkflowFailure,
 )
+from paperops.research.fakes import FakeResearchModel
+from paperops.research.graph import build_research_graph
+from paperops.research.models import (
+    EvidenceAssessment,
+    EvidenceCitation,
+    QueryRewrite,
+    ResearchAnswer,
+    ResearchEvent,
+    ResearchFailure,
+    ResearchFailureCode,
+    ResearchStatus,
+)
+from paperops.research.openai_compatible import OpenAICompatibleResearchModel
+from paperops.research.protocols import ResearchModel
 from paperops.retrieval import (
     DenseRetrievalBackend,
     FastEmbedProvider,
@@ -62,7 +79,22 @@ _CHECKPOINT_TYPES = (
     RetrievalReport,
     WorkflowEvent,
     WorkflowFailure,
+    EvidenceAssessment,
+    EvidenceCitation,
+    QueryRewrite,
+    ResearchAnswer,
+    ResearchEvent,
+    ResearchFailure,
+    ResearchFailureCode,
+    ResearchStatus,
 )
+
+_RESEARCH_RETRY_PREDECESSORS = {
+    ResearchStatus.RETRIEVING: "initialize_query",
+    ResearchStatus.ASSESSING: "retrieve_evidence",
+    ResearchStatus.REWRITING: "assess_evidence",
+    ResearchStatus.ANSWERING: "assess_evidence",
+}
 
 
 def _checkpoint_serializer() -> JsonPlusSerializer:
@@ -173,6 +205,13 @@ def _build_clients(
     )
 
 
+def _build_research_model(settings: Settings) -> ResearchModel:
+    """Create the explicitly selected semantic model adapter."""
+    if settings.research_model_mode == "openai_compatible":
+        return OpenAICompatibleResearchModel(settings)
+    return FakeResearchModel(default_min_evidence=settings.research_min_evidence_hits)
+
+
 async def _close_client(client: object) -> None:
     """Close a concrete adapter when it owns external connection pools."""
     close = getattr(client, "aclose", None)
@@ -185,6 +224,7 @@ def create_app(
     settings: Settings | None = None,
     parser: ParserClient | None = None,
     knowledge_base: RetrievalBackend | None = None,
+    research_model: ResearchModel | None = None,
 ) -> FastAPI:
     """Create an application with optional fake clients for isolated tests."""
     resolved_settings = settings or Settings()
@@ -211,24 +251,43 @@ def create_app(
                 if parser is not None and knowledge_base is not None
                 else _build_clients(resolved_settings)
             )
-            graph = build_graph(
+            ingestion_graph = build_graph(
                 parser=active_parser,
                 knowledge_base=active_knowledge_base,
                 settings=resolved_settings,
                 checkpointer=checkpointer,
             )
-            runner = JobRunner(graph)
+            active_research_model = research_model or _build_research_model(
+                resolved_settings
+            )
+            research_graph = build_research_graph(
+                retrieval=active_knowledge_base,
+                model=active_research_model,
+                settings=resolved_settings,
+                checkpointer=checkpointer,
+            )
+            runner = JobRunner(ingestion_graph)
+            research_runner = JobRunner(research_graph)
             application.state.settings = resolved_settings
             application.state.retrieval_backend_name = active_knowledge_base.name
-            application.state.graph = graph
+            application.state.research_model_name = active_research_model.name
+            application.state.graph = ingestion_graph
             application.state.runner = runner
+            application.state.research_graph = research_graph
+            application.state.research_runner = research_runner
             try:
                 yield
             finally:
                 await runner.shutdown()
+                await research_runner.shutdown()
                 await _close_client(active_parser)
                 if active_knowledge_base is not active_parser:
                     await _close_client(active_knowledge_base)
+                if (
+                    active_research_model is not active_parser
+                    and active_research_model is not active_knowledge_base
+                ):
+                    await _close_client(active_research_model)
 
     application = FastAPI(
         title="PaperOps API",
@@ -244,7 +303,10 @@ def create_app(
         return HealthView(
             client_mode=active_settings.client_mode,
             retrieval_backend=request.app.state.retrieval_backend_name,
-            active_jobs=runner.active_count,
+            research_model=request.app.state.research_model_name,
+            active_jobs=(
+                runner.active_count + request.app.state.research_runner.active_count
+            ),
         )
 
     @application.post(
@@ -398,6 +460,115 @@ def create_app(
             status_url=f"/jobs/{thread_id}",
         )
 
+    @application.post(
+        "/queries",
+        response_model=ResearchQueryAccepted,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def submit_research_query(
+        query: ResearchQueryRequest,
+        request: Request,
+    ) -> ResearchQueryAccepted:
+        """Schedule a bounded evidence-gathering query against one collection."""
+        knowledge_base = query.knowledge_base.strip()
+        question = query.question.strip()
+        if not re.fullmatch(r"[0-9A-Za-z_-]{1,128}", knowledge_base):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "knowledge_base must contain letters, digits, underscores, "
+                    "or hyphens"
+                ),
+            )
+        if not question:
+            raise HTTPException(status_code=422, detail="question cannot be blank")
+
+        thread_id = str(uuid4())
+        graph = request.app.state.research_graph
+        runner: JobRunner = request.app.state.research_runner
+        await graph.aupdate_state(
+            JobRunner.config(thread_id),
+            {"knowledge_base": knowledge_base, "question": question},
+            as_node="__start__",
+        )
+        await runner.schedule(thread_id, None)
+        return ResearchQueryAccepted(
+            thread_id=thread_id,
+            status=ResearchStatus.PENDING,
+            status_url=f"/queries/{thread_id}",
+        )
+
+    @application.get(
+        "/queries/{thread_id}",
+        response_model=ResearchQueryView,
+    )
+    async def get_research_query(
+        thread_id: str,
+        request: Request,
+    ) -> ResearchQueryView:
+        """Read the latest durable checkpoint for one research query."""
+        return await _research_query_view(request, thread_id)
+
+    @application.post(
+        "/queries/{thread_id}/resume",
+        response_model=ResumeAccepted,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def resume_research_query(
+        thread_id: str,
+        request: Request,
+    ) -> ResumeAccepted:
+        """Continue a nonterminal query checkpoint after a service restart."""
+        view = await _research_query_view(request, thread_id)
+        if view.running:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The research query is already running",
+            )
+        graph = request.app.state.research_graph
+        config = JobRunner.config(thread_id)
+        if not view.next_nodes and not (
+            view.failure is not None and view.failure.retryable
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The research query has no unfinished checkpoint to resume",
+            )
+        runner: JobRunner = request.app.state.research_runner
+        try:
+            if not view.next_nodes and view.failure is not None:
+                predecessor = _RESEARCH_RETRY_PREDECESSORS.get(view.failure.stage)
+                if predecessor is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="The failed research stage cannot be retried",
+                    )
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "status": view.failure.stage,
+                        "failure": None,
+                        "events": [
+                            ResearchEvent(
+                                status=view.failure.stage,
+                                message="Explicit retry requested for failed stage.",
+                                retrieval_round=view.retrieval_round or None,
+                            )
+                        ],
+                    },
+                    as_node=predecessor,
+                )
+            await runner.schedule(thread_id, None)
+        except JobAlreadyRunningError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return ResumeAccepted(
+            thread_id=thread_id,
+            status_url=f"/queries/{thread_id}",
+        )
+
     return application
 
 
@@ -429,6 +600,47 @@ async def _job_view(request: Request, thread_id: str) -> JobView:
         indexed_document_id=values.get("indexed_document_id") or None,
         indexed_chunk_count=values.get("indexed_chunk_count", 0),
         retrieval_report=values.get("retrieval_report"),
+        failure=values.get("failure"),
+        events=values.get("events", []),
+        runtime_error=runner.runtime_error(thread_id),
+    )
+
+
+async def _research_query_view(
+    request: Request,
+    thread_id: str,
+) -> ResearchQueryView:
+    """Map a research graph snapshot to the stable HTTP response model."""
+    graph = request.app.state.research_graph
+    runner: JobRunner = request.app.state.research_runner
+    snapshot = await graph.aget_state(JobRunner.config(thread_id))
+    values: dict[str, Any] = snapshot.values
+    if not values and not runner.is_known(thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PaperOps research query not found",
+        )
+    query_status = values.get("status", ResearchStatus.PENDING)
+    if not isinstance(query_status, ResearchStatus):
+        query_status = ResearchStatus(query_status)
+    return ResearchQueryView(
+        thread_id=thread_id,
+        query_id=values.get("query_id"),
+        status=query_status,
+        running=runner.is_running(thread_id),
+        next_nodes=list(snapshot.next),
+        knowledge_base=values.get("knowledge_base", ""),
+        question=values.get("question", ""),
+        current_query=values.get("current_query", values.get("question", "")),
+        retrieval_round=values.get("retrieval_round", 0),
+        rewrite_count=values.get("rewrite_count", 0),
+        retrieval_calls=values.get("retrieval_calls", 0),
+        model_calls=values.get("model_calls", 0),
+        attempted_queries=values.get("attempted_queries", []),
+        evidence=values.get("evidence", []),
+        assessment=values.get("assessment"),
+        last_rewrite=values.get("last_rewrite"),
+        answer=values.get("answer"),
         failure=values.get("failure"),
         events=values.get("events", []),
         runtime_error=runner.runtime_error(thread_id),
