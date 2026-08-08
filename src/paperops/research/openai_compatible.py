@@ -11,6 +11,10 @@ from pydantic import BaseModel, ValidationError
 
 from paperops.clients.errors import ResearchModelError
 from paperops.clients.http import require_json_object
+from paperops.comparison.models import (
+    ComparisonExtraction,
+    ComparisonExtractionRequest,
+)
 from paperops.research.models import (
     AnswerSynthesisRequest,
     EvidenceAssessment,
@@ -22,6 +26,7 @@ from paperops.research.models import (
 )
 from paperops.research.prompts import (
     ASSESS_EVIDENCE,
+    EXTRACT_COMPARISON,
     REWRITE_QUERY,
     SYNTHESIZE_ANSWER,
     system_prompt,
@@ -96,6 +101,18 @@ class OpenAICompatibleResearchModel:
             purpose=SYNTHESIZE_ANSWER,
             request=request,
             response_type=ResearchAnswer,
+        )
+
+    async def extract_comparison(
+        self,
+        request: ComparisonExtractionRequest,
+    ) -> ComparisonExtraction:
+        """Extract a typed evidence matrix row for one document."""
+        return await self._invoke(
+            operation="extract_comparison",
+            purpose=EXTRACT_COMPARISON,
+            request=request,
+            response_type=ComparisonExtraction,
         )
 
     async def _invoke(

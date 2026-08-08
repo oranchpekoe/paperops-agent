@@ -70,6 +70,21 @@ def _submit(client: TestClient) -> dict[str, Any]:
     return response.json()
 
 
+def _submit_named(
+    client: TestClient,
+    *,
+    filename: str,
+    payload: bytes,
+) -> dict[str, Any]:
+    response = client.post(
+        "/jobs",
+        data={"target_knowledge_base": "dataset-1"},
+        files={"file": (filename, payload, "application/pdf")},
+    )
+    assert response.status_code == 202, response.text
+    return response.json()
+
+
 def test_api_job_completes_and_survives_application_restart(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     app = create_app(
@@ -250,6 +265,187 @@ def test_api_research_query_returns_checkpointed_citations(tmp_path: Path) -> No
     assert recovered.status_code == 200
     assert recovered.json()["status"] == "completed"
     assert recovered.json()["answer"]["citation_ids"] == ["E1"]
+
+
+def test_api_builds_and_recovers_multi_paper_comparison(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    knowledge_base = FakeKnowledgeBaseClient()
+    app = create_app(
+        settings=settings,
+        parser=FakeParserClient(
+            settings.artifacts_dir,
+            [
+                VALID_MARKDOWN.replace("UAV", "Paper A"),
+                VALID_MARKDOWN.replace("UAV", "Paper B"),
+            ],
+        ),
+        knowledge_base=knowledge_base,
+    )
+
+    with TestClient(app) as client:
+        first = _submit_named(
+            client,
+            filename="paper-a.pdf",
+            payload=b"%PDF-1.7\nPaper A deterministic fixture",
+        )
+        second = _submit_named(
+            client,
+            filename="paper-b.pdf",
+            payload=b"%PDF-1.7\nPaper B deterministic fixture",
+        )
+        first_job = _wait_for_job(
+            client,
+            first["status_url"],
+            lambda job: job["status"] == "completed" and not job["running"],
+        )
+        second_job = _wait_for_job(
+            client,
+            second["status_url"],
+            lambda job: job["status"] == "completed" and not job["running"],
+        )
+        assert first_job["indexed_document_id"] != second_job["indexed_document_id"]
+
+        accepted_response = client.post(
+            "/comparisons",
+            json={
+                "knowledge_base": "dataset-1",
+                "documents": [
+                    {
+                        "document_id": first_job["indexed_document_id"],
+                        "label": "Paper A",
+                    },
+                    {
+                        "document_id": second_job["indexed_document_id"],
+                        "label": "Paper B",
+                    },
+                ],
+                "dimensions": [
+                    {
+                        "dimension_id": "method",
+                        "description": "Which method is proposed?",
+                    },
+                    {
+                        "dimension_id": "limitations",
+                        "description": "Which limitations are reported?",
+                    },
+                ],
+            },
+        )
+        assert accepted_response.status_code == 202, accepted_response.text
+        accepted = accepted_response.json()
+        completed = _wait_for_job(
+            client,
+            accepted["status_url"],
+            lambda comparison: (
+                comparison["status"] == "completed" and not comparison["running"]
+            ),
+        )
+
+    assert completed["total_cells"] == 4
+    assert completed["initial_supported_cells"] == 4
+    assert completed["supported_cells"] == 4
+    assert completed["missing_cells"] == 0
+    assert completed["recovered_cell_count"] == 0
+    assert completed["stop_reason"] == "all_cells_supported"
+    assert completed["retrieval_calls"] == 4
+    assert completed["model_calls"] == 2
+    assert all(cell["citation_ids"] for cell in completed["cells"])
+
+    restarted_app = create_app(
+        settings=settings,
+        parser=FakeParserClient(settings.artifacts_dir),
+        knowledge_base=FakeKnowledgeBaseClient(),
+    )
+    with TestClient(restarted_app) as restarted_client:
+        recovered = restarted_client.get(accepted["status_url"])
+
+    assert recovered.status_code == 200
+    assert recovered.json()["comparison_id"] == completed["comparison_id"]
+    assert recovered.json()["cells"] == completed["cells"]
+
+
+def test_api_retries_only_failed_comparison_extraction(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    knowledge_base = FakeKnowledgeBaseClient()
+    comparison_model = FakeResearchModel(
+        comparison_extractions=[RuntimeError("temporary comparison model outage")]
+    )
+    app = create_app(
+        settings=settings,
+        parser=FakeParserClient(
+            settings.artifacts_dir,
+            [
+                VALID_MARKDOWN.replace("UAV", "Paper A"),
+                VALID_MARKDOWN.replace("UAV", "Paper B"),
+            ],
+        ),
+        knowledge_base=knowledge_base,
+        comparison_model=comparison_model,
+    )
+
+    with TestClient(app) as client:
+        first = _submit_named(
+            client,
+            filename="retry-a.pdf",
+            payload=b"%PDF-1.7\nComparison retry A",
+        )
+        second = _submit_named(
+            client,
+            filename="retry-b.pdf",
+            payload=b"%PDF-1.7\nComparison retry B",
+        )
+        first_job = _wait_for_job(
+            client,
+            first["status_url"],
+            lambda job: job["status"] == "completed" and not job["running"],
+        )
+        second_job = _wait_for_job(
+            client,
+            second["status_url"],
+            lambda job: job["status"] == "completed" and not job["running"],
+        )
+        accepted = client.post(
+            "/comparisons",
+            json={
+                "knowledge_base": "dataset-1",
+                "documents": [
+                    {
+                        "document_id": first_job["indexed_document_id"],
+                        "label": "Paper A",
+                    },
+                    {
+                        "document_id": second_job["indexed_document_id"],
+                        "label": "Paper B",
+                    },
+                ],
+                "dimensions": [{"dimension_id": "method", "description": "method"}],
+            },
+        ).json()
+        failed = _wait_for_job(
+            client,
+            accepted["status_url"],
+            lambda comparison: (
+                comparison["status"] == "failed" and not comparison["running"]
+            ),
+        )
+        assert failed["failure"]["retryable"] is True
+        assert failed["failure"]["stage"] == "extracting"
+        assert failed["retrieval_calls"] == 2
+
+        resumed = client.post(f"{accepted['status_url']}/resume")
+        assert resumed.status_code == 202, resumed.text
+        completed = _wait_for_job(
+            client,
+            accepted["status_url"],
+            lambda comparison: (
+                comparison["status"] == "completed" and not comparison["running"]
+            ),
+        )
+
+    assert completed["failure"] is None
+    assert completed["retrieval_calls"] == 2
+    assert completed["model_calls"] == 3
+    assert len(comparison_model.comparison_calls) == 3
 
 
 def test_api_retries_only_the_failed_research_stage(tmp_path: Path) -> None:

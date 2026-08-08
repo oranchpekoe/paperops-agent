@@ -24,6 +24,14 @@ SYNTHESIZE_ANSWER = (
     "and disclose material limitations. Return text, citation_ids, and limitations "
     "directly at the root of the JSON object."
 )
+EXTRACT_COMPARISON = (
+    "Extract every requested comparison dimension for exactly one document. "
+    "Use only the supplied evidence. For a supported cell, write a concise claim "
+    "with inline markers such as [E1] and list only the evidence IDs used. For a "
+    "missing cell, return no claim or citations, explain the exact evidence gap, "
+    "and propose one focused document-scoped retrieval query. Return the document_id "
+    "and exactly one cell for each requested dimension; never use outside knowledge."
+)
 
 
 def system_prompt(purpose: str, schema: dict[str, Any]) -> str:

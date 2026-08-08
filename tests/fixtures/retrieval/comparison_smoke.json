@@ -1,0 +1,79 @@
+{
+  "name": "paperops-comparison-smoke",
+  "version": "1.0",
+  "kind": "smoke_fixture",
+  "split": "test",
+  "source_url": "local://paperops-comparison-smoke",
+  "license": "Original fixture data",
+  "documents": [
+    {
+      "document_id": "centralized-paper",
+      "title": "Centralized Training Study",
+      "abstract": "A study of cooperative control.",
+      "sections": [
+        {
+          "title": "Training architecture",
+          "paragraphs": [
+            "The method uses a centralized critic during training while each actor executes from local observations."
+          ]
+        }
+      ]
+    },
+    {
+      "document_id": "independent-paper",
+      "title": "Independent Learning Study",
+      "abstract": "A study of decentralized learning.",
+      "sections": [
+        {
+          "title": "Training architecture",
+          "paragraphs": [
+            "The method trains independent policies with decentralized rewards and no shared critic."
+          ]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "training-methods",
+      "document_ids": [
+        "centralized-paper",
+        "independent-paper"
+      ],
+      "dimensions": [
+        {
+          "dimension_id": "training_architecture",
+          "description": "training architecture"
+        }
+      ],
+      "expected_cells": [
+        {
+          "document_id": "centralized-paper",
+          "dimension_id": "training_architecture",
+          "status": "supported",
+          "evidence": [
+            {
+              "evidence_id": "centralized-method",
+              "document_id": "centralized-paper",
+              "text": "The method uses a centralized critic during training while each actor executes from local observations.",
+              "relevance": 3
+            }
+          ]
+        },
+        {
+          "document_id": "independent-paper",
+          "dimension_id": "training_architecture",
+          "status": "supported",
+          "evidence": [
+            {
+              "evidence_id": "independent-method",
+              "document_id": "independent-paper",
+              "text": "The method trains independent policies with decentralized rewards and no shared critic.",
+              "relevance": 3
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
