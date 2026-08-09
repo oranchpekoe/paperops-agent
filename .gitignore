@@ -180,6 +180,7 @@ paperops-index.db-wal
 .tools/
 .uv-cache/
 .paperops-eval/
+.paperops-comparison-eval/
 .paperops-models/
 .paperops-test/
 

@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     research_stop_on_stagnant_retrieval: bool = True
     research_max_chunk_chars: int = Field(default=1600, ge=200, le=10000)
     research_max_evidence_chars: int = Field(default=16000, ge=1000, le=100000)
+    comparison_max_documents: int = Field(default=8, ge=2, le=8)
+    comparison_max_dimensions: int = Field(default=6, ge=1, le=6)
+    comparison_search_top_k: int = Field(default=3, ge=1, le=20)
+    comparison_max_gap_rounds: int = Field(default=1, ge=0, le=2)
+    comparison_min_cell_confidence: float = Field(default=0.65, ge=0.0, le=1.0)
+    comparison_max_evidence_chars: int = Field(default=40000, ge=2000, le=200000)
 
     external_connect_timeout_seconds: float = Field(default=10.0, gt=0.0)
     external_read_timeout_seconds: float = Field(default=60.0, gt=0.0)

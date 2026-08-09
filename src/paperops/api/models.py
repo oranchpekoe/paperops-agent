@@ -4,6 +4,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from paperops.comparison.models import (
+    ComparisonCell,
+    ComparisonDimension,
+    ComparisonDocument,
+    ComparisonEvent,
+    ComparisonFailure,
+    ComparisonSearchAttempt,
+    ComparisonStatus,
+    ComparisonStopReason,
+)
 from paperops.models import (
     ApprovalDecision,
     JobStatus,
@@ -116,4 +126,51 @@ class ResearchQueryView(BaseModel):
     failure: ResearchFailure | None = None
     stop_reason: ResearchStopReason | None = None
     events: list[ResearchEvent] = Field(default_factory=list)
+    runtime_error: str | None = None
+
+
+class ComparisonRequest(BaseModel):
+    """Compare explicit dimensions across already-indexed papers."""
+
+    knowledge_base: str = Field(min_length=1, max_length=128)
+    documents: list[ComparisonDocument] = Field(min_length=2, max_length=8)
+    dimensions: list[ComparisonDimension] = Field(min_length=1, max_length=6)
+
+
+class ComparisonAccepted(BaseModel):
+    """Acknowledge asynchronous construction of an evidence matrix."""
+
+    thread_id: str
+    status: ComparisonStatus
+    status_url: str
+
+
+class ComparisonView(BaseModel):
+    """Expose the initial baseline matrix and gap-retrieval result."""
+
+    thread_id: str
+    comparison_id: str | None = None
+    status: ComparisonStatus
+    running: bool
+    next_nodes: list[str] = Field(default_factory=list)
+    knowledge_base: str
+    documents: list[ComparisonDocument] = Field(default_factory=list)
+    dimensions: list[ComparisonDimension] = Field(default_factory=list)
+    retrieval_round: int = 0
+    gap_round: int = 0
+    retrieval_calls: int = 0
+    model_calls: int = 0
+    new_evidence_count: int = 0
+    attempted_searches: list[ComparisonSearchAttempt] = Field(default_factory=list)
+    evidence: list[EvidenceCitation] = Field(default_factory=list)
+    initial_cells: list[ComparisonCell] = Field(default_factory=list)
+    cells: list[ComparisonCell] = Field(default_factory=list)
+    total_cells: int = 0
+    initial_supported_cells: int = 0
+    supported_cells: int = 0
+    missing_cells: int = 0
+    recovered_cell_count: int = 0
+    stop_reason: ComparisonStopReason | None = None
+    failure: ComparisonFailure | None = None
+    events: list[ComparisonEvent] = Field(default_factory=list)
     runtime_error: str | None = None

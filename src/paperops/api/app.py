@@ -6,7 +6,7 @@ import asyncio
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, TypeGuard
 from uuid import uuid4
 
 import aiosqlite
@@ -18,6 +18,9 @@ from langgraph.types import Command
 
 from paperops.api.models import (
     ApprovalAccepted,
+    ComparisonAccepted,
+    ComparisonRequest,
+    ComparisonView,
     HealthView,
     JobAccepted,
     JobView,
@@ -31,6 +34,21 @@ from paperops.clients.fakes import FakeKnowledgeBaseClient, FakeParserClient
 from paperops.clients.mineru import MinerUClient
 from paperops.clients.protocols import ParserClient, RetrievalBackend
 from paperops.clients.ragflow import RAGFlowClient
+from paperops.comparison.graph import build_comparison_graph
+from paperops.comparison.models import (
+    ComparisonCell,
+    ComparisonCellStatus,
+    ComparisonDimension,
+    ComparisonDocument,
+    ComparisonEvent,
+    ComparisonExtraction,
+    ComparisonFailure,
+    ComparisonFailureCode,
+    ComparisonSearchAttempt,
+    ComparisonStatus,
+    ComparisonStopReason,
+)
+from paperops.comparison.protocols import ComparisonModel
 from paperops.graph import build_graph
 from paperops.models import (
     ApprovalAction,
@@ -55,6 +73,7 @@ from paperops.research.models import (
     ResearchFailure,
     ResearchFailureCode,
     ResearchStatus,
+    ResearchStopReason,
 )
 from paperops.research.openai_compatible import OpenAICompatibleResearchModel
 from paperops.research.protocols import ResearchModel
@@ -87,6 +106,18 @@ _CHECKPOINT_TYPES = (
     ResearchFailure,
     ResearchFailureCode,
     ResearchStatus,
+    ResearchStopReason,
+    ComparisonCell,
+    ComparisonCellStatus,
+    ComparisonDimension,
+    ComparisonDocument,
+    ComparisonEvent,
+    ComparisonExtraction,
+    ComparisonFailure,
+    ComparisonFailureCode,
+    ComparisonSearchAttempt,
+    ComparisonStatus,
+    ComparisonStopReason,
 )
 
 _RESEARCH_RETRY_PREDECESSORS = {
@@ -212,6 +243,20 @@ def _build_research_model(settings: Settings) -> ResearchModel:
     return FakeResearchModel(default_min_evidence=settings.research_min_evidence_hits)
 
 
+def _supports_comparison(model: object) -> TypeGuard[ComparisonModel]:
+    """Detect whether an injected research model also supports matrix extraction."""
+    return callable(getattr(model, "extract_comparison", None)) and callable(
+        getattr(model, "drain_usage", None)
+    )
+
+
+def _build_comparison_model(settings: Settings) -> ComparisonModel:
+    """Create the semantic adapter used by the comparison graph."""
+    if settings.research_model_mode == "openai_compatible":
+        return OpenAICompatibleResearchModel(settings)
+    return FakeResearchModel()
+
+
 async def _close_client(client: object) -> None:
     """Close a concrete adapter when it owns external connection pools."""
     close = getattr(client, "aclose", None)
@@ -225,6 +270,7 @@ def create_app(
     parser: ParserClient | None = None,
     knowledge_base: RetrievalBackend | None = None,
     research_model: ResearchModel | None = None,
+    comparison_model: ComparisonModel | None = None,
 ) -> FastAPI:
     """Create an application with optional fake clients for isolated tests."""
     resolved_settings = settings or Settings()
@@ -266,8 +312,21 @@ def create_app(
                 settings=resolved_settings,
                 checkpointer=checkpointer,
             )
+            if comparison_model is not None:
+                active_comparison_model = comparison_model
+            elif _supports_comparison(active_research_model):
+                active_comparison_model = active_research_model
+            else:
+                active_comparison_model = _build_comparison_model(resolved_settings)
+            comparison_graph = build_comparison_graph(
+                retrieval=active_knowledge_base,
+                model=active_comparison_model,
+                settings=resolved_settings,
+                checkpointer=checkpointer,
+            )
             runner = JobRunner(ingestion_graph)
             research_runner = JobRunner(research_graph)
+            comparison_runner = JobRunner(comparison_graph)
             application.state.settings = resolved_settings
             application.state.retrieval_backend_name = active_knowledge_base.name
             application.state.research_model_name = active_research_model.name
@@ -275,11 +334,14 @@ def create_app(
             application.state.runner = runner
             application.state.research_graph = research_graph
             application.state.research_runner = research_runner
+            application.state.comparison_graph = comparison_graph
+            application.state.comparison_runner = comparison_runner
             try:
                 yield
             finally:
                 await runner.shutdown()
                 await research_runner.shutdown()
+                await comparison_runner.shutdown()
                 await _close_client(active_parser)
                 if active_knowledge_base is not active_parser:
                     await _close_client(active_knowledge_base)
@@ -288,6 +350,12 @@ def create_app(
                     and active_research_model is not active_knowledge_base
                 ):
                     await _close_client(active_research_model)
+                if (
+                    active_comparison_model is not active_parser
+                    and active_comparison_model is not active_knowledge_base
+                    and active_comparison_model is not active_research_model
+                ):
+                    await _close_client(active_comparison_model)
 
     application = FastAPI(
         title="PaperOps API",
@@ -305,7 +373,9 @@ def create_app(
             retrieval_backend=request.app.state.retrieval_backend_name,
             research_model=request.app.state.research_model_name,
             active_jobs=(
-                runner.active_count + request.app.state.research_runner.active_count
+                runner.active_count
+                + request.app.state.research_runner.active_count
+                + request.app.state.comparison_runner.active_count
             ),
         )
 
@@ -569,6 +639,121 @@ def create_app(
             status_url=f"/queries/{thread_id}",
         )
 
+    @application.post(
+        "/comparisons",
+        response_model=ComparisonAccepted,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def submit_comparison(
+        comparison: ComparisonRequest,
+        request: Request,
+    ) -> ComparisonAccepted:
+        """Schedule a bounded multi-paper evidence-matrix workflow."""
+        knowledge_base = comparison.knowledge_base.strip()
+        if not re.fullmatch(r"[0-9A-Za-z_-]{1,128}", knowledge_base):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "knowledge_base must contain letters, digits, underscores, "
+                    "or hyphens"
+                ),
+            )
+        thread_id = str(uuid4())
+        graph = request.app.state.comparison_graph
+        runner: JobRunner = request.app.state.comparison_runner
+        await graph.aupdate_state(
+            JobRunner.config(thread_id),
+            {
+                "knowledge_base": knowledge_base,
+                "documents": comparison.documents,
+                "dimensions": comparison.dimensions,
+            },
+            as_node="__start__",
+        )
+        await runner.schedule(thread_id, None)
+        return ComparisonAccepted(
+            thread_id=thread_id,
+            status=ComparisonStatus.PENDING,
+            status_url=f"/comparisons/{thread_id}",
+        )
+
+    @application.get(
+        "/comparisons/{thread_id}",
+        response_model=ComparisonView,
+    )
+    async def get_comparison(thread_id: str, request: Request) -> ComparisonView:
+        """Read the latest durable evidence matrix."""
+        return await _comparison_view(request, thread_id)
+
+    @application.post(
+        "/comparisons/{thread_id}/resume",
+        response_model=ResumeAccepted,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def resume_comparison(
+        thread_id: str,
+        request: Request,
+    ) -> ResumeAccepted:
+        """Retry one failed comparison stage or resume an unfinished checkpoint."""
+        view = await _comparison_view(request, thread_id)
+        if view.running:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The comparison is already running",
+            )
+        graph = request.app.state.comparison_graph
+        config = JobRunner.config(thread_id)
+        if not view.next_nodes and not (
+            view.failure is not None and view.failure.retryable
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The comparison has no unfinished checkpoint to resume",
+            )
+        if not view.next_nodes and view.failure is not None:
+            if view.failure.stage is ComparisonStatus.RETRIEVING_INITIAL:
+                predecessor = "initialize_comparison"
+            elif view.failure.stage is ComparisonStatus.RETRIEVING_GAPS:
+                predecessor = "extract_matrix"
+            elif view.failure.stage is ComparisonStatus.EXTRACTING:
+                predecessor = (
+                    "retrieve_missing_cells"
+                    if view.gap_round > 0
+                    else "retrieve_initial_matrix"
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The failed comparison stage cannot be retried",
+                )
+            await graph.aupdate_state(
+                config,
+                {
+                    "status": view.failure.stage,
+                    "failure": None,
+                    "events": [
+                        ComparisonEvent(
+                            status=view.failure.stage,
+                            message="Explicit retry requested for failed stage.",
+                            retrieval_round=view.retrieval_round or None,
+                        )
+                    ],
+                },
+                as_node=predecessor,
+            )
+        runner: JobRunner = request.app.state.comparison_runner
+        try:
+            await runner.schedule(thread_id, None)
+        except JobAlreadyRunningError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return ResumeAccepted(
+            thread_id=thread_id,
+            status_url=f"/comparisons/{thread_id}",
+        )
+
     return application
 
 
@@ -644,6 +829,56 @@ async def _research_query_view(
         answer=values.get("answer"),
         failure=values.get("failure"),
         stop_reason=values.get("stop_reason"),
+        events=values.get("events", []),
+        runtime_error=runner.runtime_error(thread_id),
+    )
+
+
+async def _comparison_view(request: Request, thread_id: str) -> ComparisonView:
+    """Map a comparison checkpoint to its stable HTTP response."""
+    graph = request.app.state.comparison_graph
+    runner: JobRunner = request.app.state.comparison_runner
+    snapshot = await graph.aget_state(JobRunner.config(thread_id))
+    values: dict[str, Any] = snapshot.values
+    if not values and not runner.is_known(thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PaperOps comparison not found",
+        )
+    comparison_status = values.get("status", ComparisonStatus.PENDING)
+    if not isinstance(comparison_status, ComparisonStatus):
+        comparison_status = ComparisonStatus(comparison_status)
+    initial_cells = values.get("initial_cells", [])
+    cells = values.get("cells", [])
+    initial_supported = sum(
+        cell.status is ComparisonCellStatus.SUPPORTED for cell in initial_cells
+    )
+    supported = sum(cell.status is ComparisonCellStatus.SUPPORTED for cell in cells)
+    return ComparisonView(
+        thread_id=thread_id,
+        comparison_id=values.get("comparison_id"),
+        status=comparison_status,
+        running=runner.is_running(thread_id),
+        next_nodes=list(snapshot.next),
+        knowledge_base=values.get("knowledge_base", ""),
+        documents=values.get("documents", []),
+        dimensions=values.get("dimensions", []),
+        retrieval_round=values.get("retrieval_round", 0),
+        gap_round=values.get("gap_round", 0),
+        retrieval_calls=values.get("retrieval_calls", 0),
+        model_calls=values.get("model_calls", 0),
+        new_evidence_count=values.get("new_evidence_count", 0),
+        attempted_searches=values.get("attempted_searches", []),
+        evidence=values.get("evidence", []),
+        initial_cells=initial_cells,
+        cells=cells,
+        total_cells=len(cells),
+        initial_supported_cells=initial_supported,
+        supported_cells=supported,
+        missing_cells=len(cells) - supported,
+        recovered_cell_count=values.get("recovered_cell_count", 0),
+        stop_reason=values.get("stop_reason"),
+        failure=values.get("failure"),
         events=values.get("events", []),
         runtime_error=runner.runtime_error(thread_id),
     )

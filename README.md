@@ -18,7 +18,8 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线；
 - PR5：增加独立的论文调研 Query Graph，按证据充分度执行最多两轮查询改写与补检，校验 Chunk 引用，并在证据不足时拒答；
 - PR6：在同一语料、检索后端、模型和问题上，对比零次改写基线与有界补检 Agent，分别报告证据覆盖、拒答、引用、延迟、调用次数和供应商 token；
-- 当前 PR7：让两组共享初始检索与判断，按所属论文约束 QASPER 检索；补检无新增证据时提前停止，并只把充分度判断选出的最小相关证据集交给回答模型。
+- PR7：让两组共享初始检索与判断，按所属论文约束 QASPER 检索；补检无新增证据时提前停止，并只把充分度判断选出的最小相关证据集交给回答模型；
+- 当前 PR8：面向已入库论文生成“论文 × 明确维度”证据矩阵，只对缺失单元格执行一次文档内补检，并用共享初始矩阵的配对评测报告恢复收益与额外成本。
 
 > `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
@@ -26,7 +27,7 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 
 **用户**：需要批量整理科研论文的实验室学生或研究人员。
 
-**输入**：单篇科研 PDF，或面向已索引 Collection 的研究问题。
+**输入**：单篇科研 PDF、面向已索引 Collection 的研究问题，或 2–8 篇已入库论文与 1–6 个明确比较维度。
 
 **输出**：
 
@@ -35,6 +36,7 @@ PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个�
 - 一条文档级探测问题及其检索证据；
 - 检索命中验收报告；
 - 带稳定 Chunk 引用的调研回答，或结构化的证据不足结果；
+- 保留初始结果、缺口、补检轨迹和 Chunk 引用的多论文证据矩阵；
 - 失败原因、重试记录和人工审核记录。
 
 ## MVP 工作流
@@ -94,6 +96,7 @@ src/paperops/
 │   └── providers.py          # 可替换的向量与重排模型协议
 ├── evaluation/               # QASPER 转换、证据标签与检索指标
 ├── research/                 # PR5 Query Graph、模型协议、证据/引用与有界补检
+├── comparison/               # PR8 多论文证据矩阵与缺失单元格补检图
 ├── quality/rules.py          # 确定性 Markdown 质量门
 ├── nodes/workflow.py         # 领域节点与人工 interrupt
 └── api/                      # FastAPI、线程运行器与人工审批/恢复
@@ -246,6 +249,59 @@ uv run paperops-eval evaluate-agent \
 
 Fake 模型和仓库内 `smoke_fixture` 只验证接线，不能作为效果结论。报告中的证据召回是多轮累计覆盖率，不等同于固定候选数的 Recall@K；引用指标也不代替答案语义正确率。PR7 的真实 3+3 诊断中，有界改写没有提升结果正确率，额外消耗 5,241 tokens；协议、止损机制和完整结论边界见 [PR7 自适应停止与配对评测](docs/pr7-adaptive-research.md)。PR6 的初版协议作为历史记录保留在 [PR6 Agent 评测说明](docs/pr6-agent-evaluation.md)。
 
+## PR8 多论文证据矩阵
+
+先通过 `/jobs` 将论文写入同一知识库，再提交后端返回的文档 ID 和明确维度。服务立即返回 `thread_id`，可通过状态地址读取初始矩阵、最终矩阵、缺失项、补检次数、恢复数和引用：
+
+```bash
+curl -X POST http://127.0.0.1:8080/comparisons \
+  -H "Content-Type: application/json" \
+  -d '{
+    "knowledge_base": "uav-papers",
+    "documents": [
+      {"document_id": "doc-a", "label": "Paper A"},
+      {"document_id": "doc-b", "label": "Paper B"}
+    ],
+    "dimensions": [
+      {"dimension_id": "training_architecture", "description": "training architecture"},
+      {"dimension_id": "reward_design", "description": "reward function design"}
+    ]
+  }'
+
+curl http://127.0.0.1:8080/comparisons/<thread_id>
+```
+
+每个初始检索都受目标文档 ID 约束。模型只能从提供的证据中返回结构化 `supported` 或 `missing` 单元格；跨论文引用、未知引用和不完整矩阵会失败关闭。只有 `missing` 单元格进入至多一次补检，重复查询或没有新 Chunk 时提前停止。
+
+先在不调用 LLM 的条件下评测比较任务的检索底座，再从同一个初始矩阵 checkpoint 分叉配对评测，基线立即结算，Agent 分支仅在存在缺口时继续：
+
+```bash
+uv run paperops-eval evaluate-comparison-retrieval \
+  --dataset .paperops-eval/qasper-comparison-heldout.json \
+  --output .paperops-eval/heldout-retrieval.json \
+  --strategy hybrid-reranked \
+  --top-k 1,3,5,10
+
+uv run paperops-eval evaluate-comparison \
+  --dataset tests/fixtures/retrieval/comparison_smoke.json \
+  --output .paperops-comparison-eval/report.json \
+  --strategy native \
+  --search-top-k 3 \
+  --max-gap-rounds 1
+```
+
+固定 QASPER 诊断集可从官方 JSON 生成，仓库只保留可审计的论文、问题与维度映射：
+
+```bash
+uv run paperops-eval prepare-qasper-comparison \
+  --input .paperops-eval/qasper-source/qasper-dev-v0.3.json \
+  --output .paperops-eval/qasper-comparison-heldout.json \
+  --split validation \
+  --profile heldout
+```
+
+检索后端只在 development profile 选择。Hybrid+Rerank 在冻结 heldout 的 10 个可支持单元格上，将文档内 Recall@3 从 BM25 的 `40%` 提至 `78%`、MRR 从 `0.327` 提至 `0.600`，检索中位延迟约从 `2.2ms` 增至 `322.6ms`。真实模型全链路的首次矩阵已达到 `100%` 状态正确和 `80%` 标注证据准确率，因此补检分支没有启动、增量为 `0`。这表明当前效果主要来自可评测的检索底座，而不是多跑一轮 Agent；LangGraph 负责文档隔离、结构化校验、按缺口路由、停止和恢复。`annotation_grounded_accuracy` 可能漏计论文中的替代有效证据，样本规模也不足以证明普遍收益。完整协议、消融与限制见 [PR8 多论文比较说明](docs/pr8-multi-paper-comparison.md)。
+
 ## 配置边界
 
 PaperOps 配置统一使用 `PAPEROPS_` 前缀：
@@ -277,6 +333,12 @@ PaperOps 配置统一使用 `PAPEROPS_` 前缀：
 | `PAPEROPS_RESEARCH_MAX_SELECTED_EVIDENCE` | `5` | 回答模型可接收的相关证据数量上限 |
 | `PAPEROPS_RESEARCH_STOP_ON_STAGNANT_RETRIEVAL` | `true` | 改写后没有新增证据时是否提前停止 |
 | `PAPEROPS_RESEARCH_MAX_EVIDENCE_CHARS` | `16000` | 写入单个查询 checkpoint 的证据字符总预算 |
+| `PAPEROPS_COMPARISON_MAX_DOCUMENTS` | `8` | 单次比较允许的已入库论文上限 |
+| `PAPEROPS_COMPARISON_MAX_DIMENSIONS` | `6` | 单次比较允许的明确维度上限 |
+| `PAPEROPS_COMPARISON_SEARCH_TOP_K` | `3` | 每个论文—维度检索的 Chunk 上限 |
+| `PAPEROPS_COMPARISON_MAX_GAP_ROUNDS` | `1` | 仅针对缺失单元格的补检轮数上限 |
+| `PAPEROPS_COMPARISON_MIN_CELL_CONFIDENCE` | `0.65` | 接受有引用单元格的最低模型置信度 |
+| `PAPEROPS_COMPARISON_MAX_EVIDENCE_CHARS` | `40000` | 单个比较 checkpoint 的累计证据字符预算 |
 | `PAPEROPS_RAGFLOW_BASE_URL` | `http://localhost:9380` | 可选 RAGFlow 后端地址 |
 | `PAPEROPS_RAGFLOW_API_KEY` | 空 | 仅选择 RAGFlow 后端时必需 |
 | `PAPEROPS_MAX_PARSE_ATTEMPTS` | `2` | 单文档最大解析次数 |

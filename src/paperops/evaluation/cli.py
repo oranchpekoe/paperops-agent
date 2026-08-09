@@ -8,13 +8,26 @@ import sys
 from pathlib import Path
 
 from paperops.clients.protocols import RetrievalBackend
+from paperops.comparison.protocols import ComparisonModel
 from paperops.evaluation.agent import (
     agent_report_summary,
     evaluate_research_agent,
     write_agent_evaluation_report,
 )
-from paperops.evaluation.models import DatasetKind
+from paperops.evaluation.comparison import (
+    comparison_report_summary,
+    evaluate_comparison_agent,
+    load_comparison_dataset,
+    write_comparison_evaluation_report,
+)
+from paperops.evaluation.models import DatasetKind, RetrievalDataset
 from paperops.evaluation.qasper import convert_qasper, write_retrieval_dataset
+from paperops.evaluation.qasper_comparison import (
+    DEFAULT_QASPER_COMPARISON_SPECS,
+    HELDOUT_QASPER_COMPARISON_SPECS,
+    convert_qasper_comparison,
+    write_comparison_dataset,
+)
 from paperops.evaluation.retrieval import (
     evaluate_retrieval_backend,
     load_retrieval_dataset,
@@ -74,6 +87,18 @@ def _add_backend_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_retrieval_evaluation_arguments(command: argparse.ArgumentParser) -> None:
+    """Add the shared corpus-retrieval evaluation arguments."""
+    command.add_argument("--dataset", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--work-dir", type=Path, default=Path(".paperops-eval"))
+    command.add_argument("--top-k", type=_top_k, default=(1, 3, 5, 10))
+    command.add_argument("--chunk-size", type=_positive_integer, default=1200)
+    command.add_argument("--chunk-overlap", type=int, default=160)
+    command.add_argument("--evidence-coverage", type=float, default=0.6)
+    _add_backend_arguments(command)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paperops-eval")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -95,19 +120,32 @@ def _parser() -> argparse.ArgumentParser:
         help="include only unanimously unanswerable annotations for refusal metrics",
     )
 
+    prepare_comparison = commands.add_parser(
+        "prepare-qasper-comparison",
+        help="build the fixed PR8 multi-paper diagnostic from official QASPER",
+    )
+    prepare_comparison.add_argument("--input", type=Path, required=True)
+    prepare_comparison.add_argument("--output", type=Path, required=True)
+    prepare_comparison.add_argument("--split", required=True)
+    prepare_comparison.add_argument(
+        "--profile",
+        choices=("development", "heldout"),
+        default="development",
+        help="use the frozen development or held-out paper selection",
+    )
+
     evaluate = commands.add_parser(
         "evaluate",
         aliases=["evaluate-native"],
         help="compare sparse, dense, hybrid, or reranked local retrieval",
     )
-    evaluate.add_argument("--dataset", type=Path, required=True)
-    evaluate.add_argument("--output", type=Path, required=True)
-    evaluate.add_argument("--work-dir", type=Path, default=Path(".paperops-eval"))
-    evaluate.add_argument("--top-k", type=_top_k, default=(1, 3, 5, 10))
-    evaluate.add_argument("--chunk-size", type=_positive_integer, default=1200)
-    evaluate.add_argument("--chunk-overlap", type=int, default=160)
-    evaluate.add_argument("--evidence-coverage", type=float, default=0.6)
-    _add_backend_arguments(evaluate)
+    _add_retrieval_evaluation_arguments(evaluate)
+
+    comparison_retrieval = commands.add_parser(
+        "evaluate-comparison-retrieval",
+        help="measure comparison-dimension retrieval without calling an LLM",
+    )
+    _add_retrieval_evaluation_arguments(comparison_retrieval)
 
     agent = commands.add_parser(
         "evaluate-agent",
@@ -130,6 +168,31 @@ def _parser() -> argparse.ArgumentParser:
         help="evaluate only this query id; repeat to select multiple queries",
     )
     _add_backend_arguments(agent)
+
+    comparison = commands.add_parser(
+        "evaluate-comparison",
+        help="compare an initial matrix with bounded missing-cell retrieval",
+    )
+    comparison.add_argument("--dataset", type=Path, required=True)
+    comparison.add_argument("--output", type=Path, required=True)
+    comparison.add_argument(
+        "--work-dir",
+        type=Path,
+        default=Path(".paperops-comparison-eval"),
+    )
+    comparison.add_argument("--chunk-size", type=_positive_integer, default=1200)
+    comparison.add_argument("--chunk-overlap", type=int, default=160)
+    comparison.add_argument("--evidence-coverage", type=float, default=0.6)
+    comparison.add_argument("--search-top-k", type=_positive_integer, default=3)
+    comparison.add_argument("--max-gap-rounds", type=_positive_integer, default=1)
+    comparison.add_argument("--min-confidence", type=float, default=0.65)
+    comparison.add_argument(
+        "--task-id",
+        action="append",
+        default=[],
+        help="evaluate only this task id; repeat to select multiple tasks",
+    )
+    _add_backend_arguments(comparison)
     return parser
 
 
@@ -173,8 +236,11 @@ def _build_backend(
     )
 
 
-async def _evaluate(args: argparse.Namespace) -> int:
-    dataset = load_retrieval_dataset(args.dataset)
+async def _evaluate_retrieval_dataset(
+    args: argparse.Namespace,
+    dataset: RetrievalDataset,
+) -> int:
+    """Evaluate one already-validated retrieval dataset."""
     if dataset.kind == DatasetKind.SMOKE_FIXTURE:
         print(
             "warning: smoke_fixture validates wiring only; do not report its scores "
@@ -203,7 +269,28 @@ async def _evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _evaluate(args: argparse.Namespace) -> int:
+    return await _evaluate_retrieval_dataset(
+        args,
+        load_retrieval_dataset(args.dataset),
+    )
+
+
+async def _evaluate_comparison_retrieval(args: argparse.Namespace) -> int:
+    comparison_dataset = load_comparison_dataset(args.dataset)
+    return await _evaluate_retrieval_dataset(
+        args,
+        comparison_dataset.as_retrieval_dataset(),
+    )
+
+
 def _build_research_model(settings: Settings) -> ResearchModel:
+    if settings.research_model_mode == "fake":
+        return FakeResearchModel()
+    return OpenAICompatibleResearchModel(settings)
+
+
+def _build_comparison_model(settings: Settings) -> ComparisonModel:
     if settings.research_model_mode == "fake":
         return FakeResearchModel()
     return OpenAICompatibleResearchModel(settings)
@@ -221,8 +308,8 @@ async def _evaluate_agent(args: argparse.Namespace) -> int:
         dataset = dataset.model_copy(update={"queries": selected})
     if dataset.kind == DatasetKind.SMOKE_FIXTURE:
         print(
-            "warning: smoke_fixture and fake model runs validate wiring only; "
-            "do not report their scores as benchmark results",
+            "warning: smoke_fixture validates wiring only; do not report its "
+            "scores as benchmark results",
             file=sys.stderr,
         )
     work_dir: Path = args.work_dir
@@ -256,6 +343,61 @@ async def _evaluate_agent(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _evaluate_comparison(args: argparse.Namespace) -> int:
+    dataset = load_comparison_dataset(args.dataset)
+    if args.task_id:
+        requested = set(args.task_id)
+        selected = [task for task in dataset.tasks if task.task_id in requested]
+        found = {task.task_id for task in selected}
+        unknown = requested - found
+        if unknown:
+            raise ValueError(f"Unknown task ids: {sorted(unknown)}")
+        dataset = dataset.model_copy(update={"tasks": selected})
+    if dataset.kind == DatasetKind.SMOKE_FIXTURE:
+        print(
+            "warning: smoke_fixture validates wiring only; do not report its "
+            "scores as benchmark results",
+            file=sys.stderr,
+        )
+    work_dir: Path = args.work_dir
+    settings = Settings(
+        native_index_db=work_dir / "native-index.db",
+        native_chunk_size_chars=args.chunk_size,
+        native_chunk_overlap_chars=args.chunk_overlap,
+        native_search_top_k=max(args.search_top_k, args.candidate_k),
+        comparison_search_top_k=args.search_top_k,
+        comparison_max_gap_rounds=args.max_gap_rounds,
+        comparison_min_cell_confidence=args.min_confidence,
+    )
+    if (
+        settings.research_model_mode == "fake"
+        and dataset.kind != DatasetKind.SMOKE_FIXTURE
+    ):
+        print(
+            "warning: fake model runs validate wiring only; do not report their "
+            "scores as benchmark results",
+            file=sys.stderr,
+        )
+    backend, index_profile = _build_backend(args, settings)
+    model = _build_comparison_model(settings)
+    try:
+        report = await evaluate_comparison_agent(
+            dataset,
+            backend=backend,
+            model=model,
+            settings=settings,
+            work_dir=work_dir,
+            index_profile=index_profile,
+            evidence_token_coverage_threshold=args.evidence_coverage,
+        )
+    finally:
+        if isinstance(model, OpenAICompatibleResearchModel):
+            await model.aclose()
+    write_comparison_evaluation_report(report, args.output)
+    print(comparison_report_summary(report))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Dispatch one explicit offline evaluation command."""
     args = _parser().parse_args(argv)
@@ -275,8 +417,32 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(dataset.queries)} queries to {args.output}"
         )
         return 0
+    if args.command == "prepare-qasper-comparison":
+        specs = (
+            DEFAULT_QASPER_COMPARISON_SPECS
+            if args.profile == "development"
+            else HELDOUT_QASPER_COMPARISON_SPECS
+        )
+        comparison_dataset = convert_qasper_comparison(
+            args.input,
+            split=args.split,
+            specs=specs,
+            profile_name=args.profile,
+        )
+        write_comparison_dataset(comparison_dataset, args.output)
+        cell_count = sum(len(task.expected_cells) for task in comparison_dataset.tasks)
+        print(
+            f"wrote {len(comparison_dataset.documents)} documents, "
+            f"{len(comparison_dataset.tasks)} task(s), and {cell_count} cells "
+            f"to {args.output}"
+        )
+        return 0
     if args.command == "evaluate-agent":
         return asyncio.run(_evaluate_agent(args))
+    if args.command == "evaluate-comparison":
+        return asyncio.run(_evaluate_comparison(args))
+    if args.command == "evaluate-comparison-retrieval":
+        return asyncio.run(_evaluate_comparison_retrieval(args))
     return asyncio.run(_evaluate(args))
 
 
