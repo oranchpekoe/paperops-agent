@@ -139,8 +139,11 @@ QASPER 查询按所属论文限制检索。基线与 Agent 共享初始检索和
 - 已支持单元格不会在补检轮次重复抽取；
 - API 暴露初始/最终矩阵、调用成本、恢复数、停止原因与可重试失败；
 - 进程重启后可读取比较 checkpoint，失败节点可显式恢复；
+- 比较任务可在不调用 LLM 的条件下单独评测 BM25、Dense、Hybrid 与 Rerank 检索底座；
 - 评测基线与 Agent 共享同一个初始矩阵 checkpoint；
-- grounded accuracy、缺失拒绝、证据/引用、恢复数、延迟和 token 分开报告；
+- `annotation_grounded_accuracy`、缺失拒绝、证据/引用、恢复数、延迟和 token 分开报告；
 - Smoke fixture 与确定性单测不得描述为真实效果提升。
+
+当前真实诊断选择 `hybrid_reranked` 作为效果配置，`native` 仅作为无需本地模型的基线。冻结 heldout 上更强检索使首次矩阵已经完整，补检分支增量为零；因此 PR8 不宣称 LangGraph 本身提升答案准确率。
 
 完整协议见 [PR8 多论文比较说明](pr8-multi-paper-comparison.md)。

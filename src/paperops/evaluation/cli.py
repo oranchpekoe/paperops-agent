@@ -20,8 +20,14 @@ from paperops.evaluation.comparison import (
     load_comparison_dataset,
     write_comparison_evaluation_report,
 )
-from paperops.evaluation.models import DatasetKind
+from paperops.evaluation.models import DatasetKind, RetrievalDataset
 from paperops.evaluation.qasper import convert_qasper, write_retrieval_dataset
+from paperops.evaluation.qasper_comparison import (
+    DEFAULT_QASPER_COMPARISON_SPECS,
+    HELDOUT_QASPER_COMPARISON_SPECS,
+    convert_qasper_comparison,
+    write_comparison_dataset,
+)
 from paperops.evaluation.retrieval import (
     evaluate_retrieval_backend,
     load_retrieval_dataset,
@@ -81,6 +87,18 @@ def _add_backend_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_retrieval_evaluation_arguments(command: argparse.ArgumentParser) -> None:
+    """Add the shared corpus-retrieval evaluation arguments."""
+    command.add_argument("--dataset", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--work-dir", type=Path, default=Path(".paperops-eval"))
+    command.add_argument("--top-k", type=_top_k, default=(1, 3, 5, 10))
+    command.add_argument("--chunk-size", type=_positive_integer, default=1200)
+    command.add_argument("--chunk-overlap", type=int, default=160)
+    command.add_argument("--evidence-coverage", type=float, default=0.6)
+    _add_backend_arguments(command)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paperops-eval")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -102,19 +120,32 @@ def _parser() -> argparse.ArgumentParser:
         help="include only unanimously unanswerable annotations for refusal metrics",
     )
 
+    prepare_comparison = commands.add_parser(
+        "prepare-qasper-comparison",
+        help="build the fixed PR8 multi-paper diagnostic from official QASPER",
+    )
+    prepare_comparison.add_argument("--input", type=Path, required=True)
+    prepare_comparison.add_argument("--output", type=Path, required=True)
+    prepare_comparison.add_argument("--split", required=True)
+    prepare_comparison.add_argument(
+        "--profile",
+        choices=("development", "heldout"),
+        default="development",
+        help="use the frozen development or held-out paper selection",
+    )
+
     evaluate = commands.add_parser(
         "evaluate",
         aliases=["evaluate-native"],
         help="compare sparse, dense, hybrid, or reranked local retrieval",
     )
-    evaluate.add_argument("--dataset", type=Path, required=True)
-    evaluate.add_argument("--output", type=Path, required=True)
-    evaluate.add_argument("--work-dir", type=Path, default=Path(".paperops-eval"))
-    evaluate.add_argument("--top-k", type=_top_k, default=(1, 3, 5, 10))
-    evaluate.add_argument("--chunk-size", type=_positive_integer, default=1200)
-    evaluate.add_argument("--chunk-overlap", type=int, default=160)
-    evaluate.add_argument("--evidence-coverage", type=float, default=0.6)
-    _add_backend_arguments(evaluate)
+    _add_retrieval_evaluation_arguments(evaluate)
+
+    comparison_retrieval = commands.add_parser(
+        "evaluate-comparison-retrieval",
+        help="measure comparison-dimension retrieval without calling an LLM",
+    )
+    _add_retrieval_evaluation_arguments(comparison_retrieval)
 
     agent = commands.add_parser(
         "evaluate-agent",
@@ -205,8 +236,11 @@ def _build_backend(
     )
 
 
-async def _evaluate(args: argparse.Namespace) -> int:
-    dataset = load_retrieval_dataset(args.dataset)
+async def _evaluate_retrieval_dataset(
+    args: argparse.Namespace,
+    dataset: RetrievalDataset,
+) -> int:
+    """Evaluate one already-validated retrieval dataset."""
     if dataset.kind == DatasetKind.SMOKE_FIXTURE:
         print(
             "warning: smoke_fixture validates wiring only; do not report its scores "
@@ -233,6 +267,21 @@ async def _evaluate(args: argparse.Namespace) -> int:
     write_evaluation_report(report, args.output)
     print(report_summary(report))
     return 0
+
+
+async def _evaluate(args: argparse.Namespace) -> int:
+    return await _evaluate_retrieval_dataset(
+        args,
+        load_retrieval_dataset(args.dataset),
+    )
+
+
+async def _evaluate_comparison_retrieval(args: argparse.Namespace) -> int:
+    comparison_dataset = load_comparison_dataset(args.dataset)
+    return await _evaluate_retrieval_dataset(
+        args,
+        comparison_dataset.as_retrieval_dataset(),
+    )
 
 
 def _build_research_model(settings: Settings) -> ResearchModel:
@@ -368,10 +417,32 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(dataset.queries)} queries to {args.output}"
         )
         return 0
+    if args.command == "prepare-qasper-comparison":
+        specs = (
+            DEFAULT_QASPER_COMPARISON_SPECS
+            if args.profile == "development"
+            else HELDOUT_QASPER_COMPARISON_SPECS
+        )
+        comparison_dataset = convert_qasper_comparison(
+            args.input,
+            split=args.split,
+            specs=specs,
+            profile_name=args.profile,
+        )
+        write_comparison_dataset(comparison_dataset, args.output)
+        cell_count = sum(len(task.expected_cells) for task in comparison_dataset.tasks)
+        print(
+            f"wrote {len(comparison_dataset.documents)} documents, "
+            f"{len(comparison_dataset.tasks)} task(s), and {cell_count} cells "
+            f"to {args.output}"
+        )
+        return 0
     if args.command == "evaluate-agent":
         return asyncio.run(_evaluate_agent(args))
     if args.command == "evaluate-comparison":
         return asyncio.run(_evaluate_comparison(args))
+    if args.command == "evaluate-comparison-retrieval":
+        return asyncio.run(_evaluate_comparison_retrieval(args))
     return asyncio.run(_evaluate(args))
 
 

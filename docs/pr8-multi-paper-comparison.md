@@ -61,7 +61,7 @@ PENDING
 
 ## 6. 配对评测协议
 
-`paperops-eval evaluate-comparison` 使用完整的论文 × 维度标签矩阵。每个 `supported` 标签必须提供独立标注的证据段落，`missing` 标签不得带证据。
+`paperops-eval evaluate-comparison-retrieval` 先将论文 × 维度标签投影为文档内检索任务，不调用 LLM，分别报告 Recall@K、MRR、NDCG 与延迟。`paperops-eval evaluate-comparison` 再使用同一矩阵评测结构化抽取和有界补检。每个 `supported` 标签必须提供独立标注的证据段落，`missing` 标签不得带证据。
 
 为避免两次模型采样制造伪增益，两个变体共享：
 
@@ -72,26 +72,72 @@ PENDING
 
 零补检基线在该 checkpoint 直接结算；Agent 分支只从此处继续检索缺失单元格。报告分别给出：
 
-- 状态准确率与有证据约束的 grounded accuracy；
+- 状态准确率与 `annotation_grounded_accuracy`；
 - 可支持单元格完成率与应缺失单元格拒绝率；
 - 证据覆盖率、引用 Precision/Recall；
 - 失败率、停滞停止率；
 - 检索、模型调用、延迟和供应商 token；
 - 初始漏掉的可支持单元格、恢复数、恢复率和每次恢复的增量 token。
 
-## 7. 当前验证结果与结论边界
+## 7. 固定 QASPER 诊断集
 
-确定性测试构造了 2 篇论文 × 2 个维度的完整矩阵，其中一个可支持单元格必须经过聚焦查询才能命中。共享初始矩阵的 grounded accuracy 为 `0.75`，一次补检后为 `1.00`；恢复 `1/1` 个初始漏检单元格，同时保留两个应缺失单元格。该测试还验证 Agent 分支只增加 3 次缺口检索和 2 次针对缺失维度的模型调用，没有重复运行首次抽取。
+仓库不复制 QASPER 全量语料，只提交固定的论文、问题与维度映射。生成器从官方 QASPER JSON 保留原始论文正文、问题 ID、问题文本和人工证据段落；`source_query_id` 与 `source_question` 使每个比较标签可追溯。development profile 包含 6 篇论文、2 个任务和 15 个可支持单元格，用于选择检索后端；heldout profile 在选择前冻结，包含 5 篇不同论文和 10 个可支持单元格。
 
-2026-08-08 使用 DeepSeek v4 Flash 对仓库内 2 篇 × 1 维度 Smoke fixture 执行真实适配器诊断：2 个单元格均通过所属论文引用校验，grounded accuracy 为 `1.00`，2 次模型调用共返回 `1,880` tokens，端到端约 `44.1s`。该任务的初始矩阵已经完整，因此 Agent 与基线完全相同、增益为 `0`；它验证真实 JSON 调用和“无缺口则不继续”的停止逻辑，不证明缺口补检有效。
+```bash
+uv run paperops-eval prepare-qasper-comparison \
+  --input .paperops-eval/qasper-source/qasper-dev-v0.3.json \
+  --output .paperops-eval/qasper-comparison-development.json \
+  --split validation \
+  --profile development
 
-这只是可重复的控制流单测，不是模型或产品效果结论。仓库内 `comparison_smoke.json` 与 Fake 模型同样只验证 CLI、索引、图和报告接线。简历或 README 只有在固定、独立标注的真实论文集合上观察到正向恢复，并同时报告额外 token 与延迟后，才可以写“补检提升了效果”；负结果也必须保留。
+uv run paperops-eval prepare-qasper-comparison \
+  --input .paperops-eval/qasper-source/qasper-dev-v0.3.json \
+  --output .paperops-eval/qasper-comparison-heldout.json \
+  --split validation \
+  --profile heldout
+```
 
-## 8. 已知限制
+这里的 `annotation_grounded_accuracy` 比普通状态准确率更严格：`supported` 不仅要判断正确，引用还要覆盖对应 QASPER 问题的人工证据段落。它不是完整语义准确率，因为 QASPER 的问题证据并不穷举论文内所有可能支持同一比较维度的段落。
+
+固定 profile 不再把 QASPER 的 `unanswerable` 直接映射为比较矩阵的 `missing`。问题级不可回答不能证明更宽泛的比较维度在整篇论文中不存在；强检索曾从这样的论文中召回有效模型对比，说明原负标签会制造伪错误。真实缺失项需要全文级人工审查，本 PR 只在可控测试中验证拒答与停止逻辑。
+
+## 8. 当前验证结果
+
+确定性测试构造了 2 篇论文 × 2 个维度的完整矩阵，其中一个可支持单元格必须经过聚焦查询才能命中。共享初始矩阵的 `annotation_grounded_accuracy` 为 `0.75`，一次补检后为 `1.00`；恢复 `1/1` 个初始漏检单元格，同时保留两个应缺失单元格。该测试验证控制流，不作为真实效果证据。
+
+### 8.1 先选择检索底座
+
+固定 `chunk=1200/overlap=160`，对 development 的 15 个文档内维度查询执行模型无关评测：
+
+| 后端 | Recall@1 | Recall@3 | Recall@5 | MRR | P50 |
+|---|---:|---:|---:|---:|---:|
+| BM25 | 31.11% | 61.11% | 68.52% | 0.545 | 3.0ms |
+| Dense | 33.70% | 59.26% | 90.00% | 0.600 | 7.9ms |
+| Hybrid | 41.11% | 62.59% | 82.59% | 0.628 | 9.1ms |
+| Hybrid+Rerank | 41.11% | **87.78%** | **95.19%** | **0.683** | 293.8ms |
+
+Dense 并没有在 `top_k=3` 稳定超过 BM25，说明“换成向量库”本身不是解决方案。development 选择 Hybrid+Rerank 后，只在冻结 heldout 与 BM25 对照：
+
+| heldout 后端 | Recall@1 | Recall@3 | Recall@5 | MRR | P50 |
+|---|---:|---:|---:|---:|---:|
+| BM25 | 5.00% | 40.00% | 58.00% | 0.327 | 2.2ms |
+| Hybrid+Rerank | **35.00%** | **78.00%** | **78.00%** | **0.600** | 322.6ms |
+
+### 8.2 再评价 Agent 增量
+
+2026-08-08 的 BM25 配对诊断中，heldout 首次矩阵状态准确率为 `90%`，一次补检恢复唯一初始漏检后达到 `100%`，但 `annotation_grounded_accuracy` 只从 `50%` 增至 `60%`，额外消耗 `2,489` tokens 和约 `3.18s`。这证明补检循环能修复这个弱底座的一个已观察漏检，但不能证明弱底座是合理产品配置。
+
+2026-08-09 使用 development 选定的 Hybrid+Rerank 重跑冻结 heldout：首次矩阵已经达到 `100%` 状态正确、`80%` 标注证据准确率和 `78%` 证据召回；5 次模型调用共消耗 `13,671` tokens，端到端约 `29.37s`。没有 `missing` 单元格，因此图没有补检，Agent 相对首次矩阵的检索、模型、token 和质量增量均为 `0`。
+
+最终结论是：当前小样本中的主要效果提升来自检索底座，而不是 LangGraph 或多跑一轮模型。执行图仍负责文档隔离、结构化校验、持久化恢复、按缺口路由和安全停止；其补检分支是有界兜底，不作为默认必然提升点。该结论仍不具有统计显著性，也不代表业务收益。
+
+## 9. 已知限制
 
 - 当前输入必须使用已入库文档 ID，不负责自动选论文；
 - 维度由用户明确提供，不做无约束的计划生成；
-- 证据匹配衡量标注段落覆盖，不代替 claim 的完整语义正确性；
+- QASPER 原始问题被人工映射为共享比较维度；这是可追溯诊断集，不是官方多论文比较 benchmark；
+- 证据匹配衡量标注段落覆盖，可能漏计替代有效段落，也不代替 claim 的完整语义正确性；
 - 一次抽取按论文聚合多个维度，极大矩阵不在本版本范围内；
-- 没有外部真实比较数据集结果，因此不宣称缺口补检已经产生业务收益；
+- 当前固定真实 profile 只有可支持标签，尚未建立经全文审查的真实 `missing` 集合；
+- 检索与全链路诊断样本都很小，因此不宣称普遍效果或业务收益；
 - 不包含 Web 搜索、引用网络扩展、任务队列、多租户或 Agentic RL。

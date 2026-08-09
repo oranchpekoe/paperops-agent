@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from time import perf_counter
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -113,6 +113,10 @@ class OpenAICompatibleResearchModel:
             purpose=EXTRACT_COMPARISON,
             request=request,
             response_type=ComparisonExtraction,
+            normalize=lambda payload: self._restore_comparison_document_ids(
+                payload,
+                request.document.document_id,
+            ),
         )
 
     async def _invoke(
@@ -122,6 +126,7 @@ class OpenAICompatibleResearchModel:
         purpose: str,
         request: BaseModel,
         response_type: type[ResponseModel],
+        normalize: Callable[[Any], Any] | None = None,
     ) -> ResponseModel:
         """Call JSON mode and validate both transport and semantic shape."""
         schema = response_type.model_json_schema()
@@ -162,6 +167,8 @@ class OpenAICompatibleResearchModel:
                 raise ResearchModelError(
                     "Research model returned non-JSON message content"
                 ) from exc
+            if normalize is not None:
+                parsed = normalize(parsed)
             try:
                 result = response_type.model_validate(parsed)
             except ValidationError as exc:
@@ -180,6 +187,30 @@ class OpenAICompatibleResearchModel:
                     latency_ms=(perf_counter() - started) * 1000,
                 )
             )
+
+    @staticmethod
+    def _restore_comparison_document_ids(
+        payload: Any,
+        document_id: str,
+    ) -> Any:
+        """Fill only omitted ids that are unambiguous in a single-document call."""
+        if not isinstance(payload, dict):
+            return payload
+        normalized = dict(payload)
+        if not normalized.get("document_id"):
+            normalized["document_id"] = document_id
+        cells = normalized.get("cells")
+        if not isinstance(cells, list):
+            return normalized
+        normalized["cells"] = [
+            (
+                {**cell, "document_id": document_id}
+                if isinstance(cell, dict) and not cell.get("document_id")
+                else cell
+            )
+            for cell in cells
+        ]
+        return normalized
 
     def drain_usage(self) -> list[ModelCallUsage]:
         """Return and clear provider telemetry captured by the adapter."""

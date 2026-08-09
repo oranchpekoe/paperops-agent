@@ -273,9 +273,15 @@ curl http://127.0.0.1:8080/comparisons/<thread_id>
 
 每个初始检索都受目标文档 ID 约束。模型只能从提供的证据中返回结构化 `supported` 或 `missing` 单元格；跨论文引用、未知引用和不完整矩阵会失败关闭。只有 `missing` 单元格进入至多一次补检，重复查询或没有新 Chunk 时提前停止。
 
-离线评测从同一个初始矩阵 checkpoint 分叉，基线立即结算，Agent 分支继续补缺：
+先在不调用 LLM 的条件下评测比较任务的检索底座，再从同一个初始矩阵 checkpoint 分叉配对评测，基线立即结算，Agent 分支仅在存在缺口时继续：
 
 ```bash
+uv run paperops-eval evaluate-comparison-retrieval \
+  --dataset .paperops-eval/qasper-comparison-heldout.json \
+  --output .paperops-eval/heldout-retrieval.json \
+  --strategy hybrid-reranked \
+  --top-k 1,3,5,10
+
 uv run paperops-eval evaluate-comparison \
   --dataset tests/fixtures/retrieval/comparison_smoke.json \
   --output .paperops-comparison-eval/report.json \
@@ -284,7 +290,17 @@ uv run paperops-eval evaluate-comparison \
   --max-gap-rounds 1
 ```
 
-仓库 Smoke fixture 与 Fake 模型只证明接线正确；确定性恢复单测也不等于真实数据效果。只有固定外部数据集上的 `recovered_supported_cells`、grounded accuracy 增量及相应 token/延迟成本才能作为效果证据。设计、状态机、指标与限制见 [PR8 多论文比较说明](docs/pr8-multi-paper-comparison.md)。
+固定 QASPER 诊断集可从官方 JSON 生成，仓库只保留可审计的论文、问题与维度映射：
+
+```bash
+uv run paperops-eval prepare-qasper-comparison \
+  --input .paperops-eval/qasper-source/qasper-dev-v0.3.json \
+  --output .paperops-eval/qasper-comparison-heldout.json \
+  --split validation \
+  --profile heldout
+```
+
+检索后端只在 development profile 选择。Hybrid+Rerank 在冻结 heldout 的 10 个可支持单元格上，将文档内 Recall@3 从 BM25 的 `40%` 提至 `78%`、MRR 从 `0.327` 提至 `0.600`，检索中位延迟约从 `2.2ms` 增至 `322.6ms`。真实模型全链路的首次矩阵已达到 `100%` 状态正确和 `80%` 标注证据准确率，因此补检分支没有启动、增量为 `0`。这表明当前效果主要来自可评测的检索底座，而不是多跑一轮 Agent；LangGraph 负责文档隔离、结构化校验、按缺口路由、停止和恢复。`annotation_grounded_accuracy` 可能漏计论文中的替代有效证据，样本规模也不足以证明普遍收益。完整协议、消融与限制见 [PR8 多论文比较说明](docs/pr8-multi-paper-comparison.md)。
 
 ## 配置边界
 

@@ -217,7 +217,7 @@ def _evaluate_cells(
             citation_recall = len(cited_matches) / len(expected.evidence)
 
         status_correct = not failed and actual.status is expected.status
-        grounded_correct = status_correct and (
+        annotation_grounded_correct = status_correct and (
             expected.status is ComparisonCellStatus.MISSING or bool(citation_recall)
         )
         evaluations.append(
@@ -227,7 +227,7 @@ def _evaluate_cells(
                 expected_status=expected.status,
                 actual=actual,
                 status_correct=status_correct,
-                grounded_correct=grounded_correct,
+                annotation_grounded_correct=annotation_grounded_correct,
                 matched_evidence_ids=sorted(matched),
                 evidence_recall=evidence_recall,
                 citation_precision=citation_precision,
@@ -430,7 +430,9 @@ def _aggregate(
     latencies = [run.latency_ms for run in runs]
     return ComparisonVariantMetrics(
         status_accuracy=statistics.fmean(cell.status_correct for cell in cells),
-        grounded_accuracy=statistics.fmean(cell.grounded_correct for cell in cells),
+        annotation_grounded_accuracy=statistics.fmean(
+            cell.annotation_grounded_correct for cell in cells
+        ),
         supported_completion_rate=(
             statistics.fmean(cell.status_correct for cell in supported)
             if supported
@@ -533,7 +535,7 @@ async def evaluate_comparison_agent(
     recovered = sum(
         agent_by_key[
             (item.task_id, cell.document_id, cell.dimension_id)
-        ].grounded_correct
+        ].annotation_grounded_correct
         for item in comparisons
         for cell in item.baseline.cells
         if cell.expected_status is ComparisonCellStatus.SUPPORTED
@@ -581,8 +583,9 @@ async def evaluate_comparison_agent(
             status_accuracy=(
                 agent_metrics.status_accuracy - baseline_metrics.status_accuracy
             ),
-            grounded_accuracy=(
-                agent_metrics.grounded_accuracy - baseline_metrics.grounded_accuracy
+            annotation_grounded_accuracy=(
+                agent_metrics.annotation_grounded_accuracy
+                - baseline_metrics.annotation_grounded_accuracy
             ),
             evidence_recall=evidence_delta,
             average_retrieval_calls=(
@@ -613,7 +616,8 @@ async def evaluate_comparison_agent(
         tasks=comparisons,
         limitations=[
             "A smoke_fixture validates wiring only and cannot establish product lift.",
-            "Grounded correctness requires citation overlap with labelled evidence, not full semantic claim grading.",
+            "Annotation-grounded correctness requires citation overlap with labelled evidence; alternative valid evidence may be undercounted.",
+            "A question-level unanswerable label does not prove that a broader comparison dimension is absent from the whole paper.",
             "Both variants share initial retrieval and extraction; only the Agent arm performs gap retrieval.",
             "Token totals are null when the model provider omits usage telemetry.",
         ],

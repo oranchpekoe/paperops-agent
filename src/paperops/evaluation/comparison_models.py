@@ -26,6 +26,8 @@ class ComparisonExpectedCell(BaseModel):
     dimension_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     status: ComparisonCellStatus
     evidence: list[EvidenceReference] = Field(default_factory=list)
+    source_query_id: str | None = Field(default=None, min_length=1)
+    source_question: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_status_evidence(self) -> ComparisonExpectedCell:
@@ -36,6 +38,10 @@ class ComparisonExpectedCell(BaseModel):
             raise ValueError("missing comparison cells cannot contain evidence")
         if any(item.document_id != self.document_id for item in self.evidence):
             raise ValueError("cell evidence must belong to the cell document")
+        if (self.source_query_id is None) != (self.source_question is None):
+            raise ValueError(
+                "source_query_id and source_question must be provided together"
+            )
         evidence_ids = [item.evidence_id for item in self.evidence]
         if len(evidence_ids) != len(set(evidence_ids)):
             raise ValueError("evidence ids must be unique within a comparison cell")
@@ -145,7 +151,7 @@ class ComparisonCellEvaluation(BaseModel):
     expected_status: ComparisonCellStatus
     actual: ComparisonCell
     status_correct: bool
-    grounded_correct: bool
+    annotation_grounded_correct: bool
     matched_evidence_ids: list[str] = Field(default_factory=list)
     evidence_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     citation_precision: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -186,7 +192,7 @@ class ComparisonVariantMetrics(BaseModel):
     """Aggregate quality, refusal, cost, and latency for one variant."""
 
     status_accuracy: float = Field(ge=0.0, le=1.0)
-    grounded_accuracy: float = Field(ge=0.0, le=1.0)
+    annotation_grounded_accuracy: float = Field(ge=0.0, le=1.0)
     supported_completion_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     missing_refusal_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     evidence_recall: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -209,7 +215,7 @@ class ComparisonMetricDelta(BaseModel):
     """Gap-retrieval aggregate minus the shared initial-matrix baseline."""
 
     status_accuracy: float
-    grounded_accuracy: float
+    annotation_grounded_accuracy: float
     evidence_recall: float | None = None
     average_retrieval_calls: float
     average_gap_rounds: float

@@ -188,3 +188,58 @@ async def test_adapter_extracts_typed_comparison_cells() -> None:
     usage = client.drain_usage()
     assert usage[0].operation == "extract_comparison"
     assert usage[0].success is True
+
+
+@pytest.mark.asyncio
+async def test_adapter_restores_unambiguous_comparison_document_ids() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "cells": [
+                                        {
+                                            "dimension_id": "method",
+                                            "status": "missing",
+                                            "confidence": 0.8,
+                                            "missing_reason": "No method evidence.",
+                                            "suggested_query": "method architecture",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = OpenAICompatibleResearchModel(
+        _settings(),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = await client.extract_comparison(
+            ComparisonExtractionRequest(
+                document=ComparisonDocument(
+                    document_id="paper-1",
+                    label="Paper One",
+                ),
+                dimensions=[
+                    ComparisonDimension(
+                        dimension_id="method",
+                        description="Which method is proposed?",
+                    )
+                ],
+                evidence=_assessment_request().evidence,
+            )
+        )
+    finally:
+        await client.aclose()
+
+    assert result.document_id == "paper-1"
+    assert result.cells[0].document_id == "paper-1"

@@ -213,7 +213,7 @@ def _dataset() -> ComparisonEvaluationDataset:
 
 
 @pytest.mark.asyncio
-async def test_comparison_evaluation_measures_grounded_recovery_and_cost(
+async def test_comparison_evaluation_measures_annotated_recovery_and_cost(
     tmp_path: Path,
 ) -> None:
     model = FakeResearchModel(
@@ -294,9 +294,9 @@ async def test_comparison_evaluation_measures_grounded_recovery_and_cost(
     assert (
         report.comparison_protocol == "shared_initial_matrix_then_gap_continuation_v1"
     )
-    assert report.baseline.grounded_accuracy == 0.75
-    assert report.agent.grounded_accuracy == 1.0
-    assert report.delta.grounded_accuracy == 0.25
+    assert report.baseline.annotation_grounded_accuracy == 0.75
+    assert report.agent.annotation_grounded_accuracy == 1.0
+    assert report.delta.annotation_grounded_accuracy == 0.25
     assert report.baseline.evidence_recall == 0.5
     assert report.agent.evidence_recall == 1.0
     assert report.agent.missing_refusal_rate == 1.0

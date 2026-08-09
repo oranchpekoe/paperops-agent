@@ -29,8 +29,11 @@ EXTRACT_COMPARISON = (
     "Use only the supplied evidence. For a supported cell, write a concise claim "
     "with inline markers such as [E1] and list only the evidence IDs used. For a "
     "missing cell, return no claim or citations, explain the exact evidence gap, "
-    "and propose one focused document-scoped retrieval query. Return the document_id "
-    "and exactly one cell for each requested dimension; never use outside knowledge."
+    "and propose one focused document-scoped retrieval query. The gap query must be "
+    "a compact keyword query, introduce likely section terms or lexical synonyms, "
+    "and not merely paraphrase the requested dimension as a question. Return the "
+    "document_id and exactly one cell for each requested dimension; never use outside "
+    "knowledge."
 )
 
 
