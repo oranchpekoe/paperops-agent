@@ -7,21 +7,45 @@
 
 PaperOps 的目标不是再实现一个通用聊天 Agent，而是解决一个可以验证的具体问题：**PDF 被解析并写入索引，不代表证据能够被可靠召回**。双栏排版、公式、表格、图片和扫描页可能产生隐蔽的内容缺失；不透明的切片和检索策略又会掩盖召回失败，因此需要一条可重试、可人工审核、可恢复且检索过程可评测的处理链路。
 
-## 当前状态
+## v0.1.0 能力
 
-项目已经从通用多模式原型切换为单一领域工作流：
+- **可恢复入库**：PDF 解析、确定性质量门、有限重试、人工审核、SQLite checkpoint 与幂等写入；
+- **可替换检索**：标题结构感知切片，以及 BM25、稠密召回、RRF 融合和交叉编码器重排；
+- **证据约束问答**：有界查询改写、证据去重与预算、结构化模型输出、稳定 Chunk 引用校验和证据不足拒答；
+- **多论文比较**：按“论文 × 明确维度”生成可审计证据矩阵，只为缺失单元格执行一次文档内补检；
+- **工程边界**：FastAPI 作业接口、Fake/Real 依赖隔离、外部服务错误归一化、测试与离线评测命令。
 
-- `v0.1-multimode-demo`：已归档的四模式 Agent 学习原型；
-- PR1：完成产品边界、包结构、依赖和上游归属整理；
-- PR2：使用 Fake Parser/Retrieval Backend 跑通单文档状态机、重试、人工中断、checkpoint 恢复和幂等入库；
-- PR3：已接入 MinerU、SQLite checkpoint、作业 API，以及自研结构感知切片和 FTS5/BM25 检索基线；
-- PR4：增加稠密召回、RRF 融合、交叉编码器重排与独立 QASPER 评测；默认仍保留经过对照的 BM25 基线；
-- PR5：增加独立的论文调研 Query Graph，按证据充分度执行最多两轮查询改写与补检，校验 Chunk 引用，并在证据不足时拒答；
-- PR6：在同一语料、检索后端、模型和问题上，对比零次改写基线与有界补检 Agent，分别报告证据覆盖、拒答、引用、延迟、调用次数和供应商 token；
-- PR7：让两组共享初始检索与判断，按所属论文约束 QASPER 检索；补检无新增证据时提前停止，并只把充分度判断选出的最小相关证据集交给回答模型；
-- 当前 PR8：面向已入库论文生成“论文 × 明确维度”证据矩阵，只对缺失单元格执行一次文档内补检，并用共享初始矩阵的配对评测报告恢复收益与额外成本。
+`v0.1-multimode-demo` 标签保留了早期四模式学习原型；当前版本已收敛为科研论文处理这一条领域工作流。
 
-> `langgraph.json` 继续暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
+## 已验证结果
+
+| 冻结 QASPER held-out 小样本 | BM25 | Hybrid + Rerank |
+| --- | ---: | ---: |
+| Recall@3 | 40% | 78% |
+| MRR | 0.327 | 0.600 |
+| p50 检索延迟 | 2.2 ms | 322.6 ms |
+
+在同一 held-out 配置的真实模型全链路诊断中，比较矩阵状态准确率为 100%，标注证据准确率为 80%，证据召回率为 78%。该样本没有产生缺失单元格，因此补检分支增益为 0；这说明当前收益来自检索栈，而不是“多跑一轮 Agent”。这些数字用于暴露质量—成本取舍和失败边界，不代表大规模统计结论或线上业务提升。完整口径见 [多论文比较评测](docs/pr8-multi-paper-comparison.md)。
+
+## 三分钟 Fake 演示
+
+Fake 演示不需要 API Key，也不会调用 MinerU 或模型供应商。先启动本地服务：
+
+```powershell
+uv sync --frozen
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+uv run paperops-api
+```
+
+在第二个 PowerShell 终端运行完整的“上传两篇论文 → 调研查询 → 多论文比较”链路：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\demo.ps1
+```
+
+脚本会检查服务模式，若不是 Fake Parser 与 Fake Research Model 会直接拒绝执行；它使用临时伪 PDF 验证 API、图编排和 checkpoint 契约，**不代表真实 PDF 解析质量**。真实服务接入与离线评测命令见后文。
+
+> `langgraph.json` 暴露确定性 Fake 图用于 Studio 调试。真实服务由 FastAPI 应用按 `PAPEROPS_CLIENT_MODE=real` 装配，防止导入模块或运行单测时误调用外部服务。
 
 ## 目标用户与输入输出
 
@@ -148,7 +172,7 @@ uv run langgraph dev
 }
 ```
 
-## PR3 作业 API
+## PDF 作业 API
 
 复制配置并启动本地 Fake 服务：
 
@@ -199,7 +223,7 @@ PAPEROPS_INTEGRATION_COLLECTION_ID=uav-papers \
 uv run pytest tests/integration_tests -m integration -s
 ```
 
-## PR4 检索评测
+## 检索后端与评测
 
 本地模型依赖是可选项；默认安装和真实服务仍使用 FTS5/BM25：
 
@@ -213,7 +237,7 @@ uv run paperops-eval evaluate \
 
 PR4 的历史 Collection 级 QASPER dev 50 篇/148 问题诊断中，Dense 单路没有超过 BM25；Sparse + Dense RRF 将 Recall@10 从 0.382 提升至 0.429，交叉编码器重排进一步提升到 0.479，但带来明显 CPU 延迟。因此服务默认值保持 `native`，`dense`、`hybrid` 和 `hybrid_reranked` 必须显式选择。PR7 已把新转换数据修正为论文级作用域，两版数字不能直接比较；数据规则、完整指标和迁移说明见 [PR4 检索评测说明](docs/pr4-retrieval-evaluation.md)。
 
-## PR5 论文调研查询 API
+## 论文调研查询 API
 
 先通过 `/jobs` 将论文写入目标 Collection，再提交问题：
 
@@ -227,7 +251,7 @@ curl http://127.0.0.1:8080/queries/<thread_id>
 
 默认 `PAPEROPS_RESEARCH_MODEL_MODE=fake` 只用于离线接线测试。真实查询需选择支持 JSON mode 的 OpenAI-compatible chat-completions 服务，并在未跟踪的 `.env` 中设置模型地址、名称和 Key。实现边界、状态流转和验收命令见 [PR5 调研 Agent 说明](docs/pr5-research-agent.md)。
 
-## PR7 配对 Agent 评测
+## 查询图配对评测
 
 QASPER 转换器可选择保留标注者一致认定的不可回答问题，并为每个问题保存所属论文 ID。评测在初始充分度判断后分叉：零改写基线立即停止，有界 Agent 只在证据不足时从同一 checkpoint 继续补检：
 
@@ -249,7 +273,7 @@ uv run paperops-eval evaluate-agent \
 
 Fake 模型和仓库内 `smoke_fixture` 只验证接线，不能作为效果结论。报告中的证据召回是多轮累计覆盖率，不等同于固定候选数的 Recall@K；引用指标也不代替答案语义正确率。PR7 的真实 3+3 诊断中，有界改写没有提升结果正确率，额外消耗 5,241 tokens；协议、止损机制和完整结论边界见 [PR7 自适应停止与配对评测](docs/pr7-adaptive-research.md)。PR6 的初版协议作为历史记录保留在 [PR6 Agent 评测说明](docs/pr6-agent-evaluation.md)。
 
-## PR8 多论文证据矩阵
+## 多论文证据矩阵
 
 先通过 `/jobs` 将论文写入同一知识库，再提交后端返回的文档 ID 和明确维度。服务立即返回 `thread_id`，可通过状态地址读取初始矩阵、最终矩阵、缺失项、补检次数、恢复数和引用：
 
